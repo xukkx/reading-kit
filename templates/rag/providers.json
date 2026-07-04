@@ -1,0 +1,27 @@
+{
+  "default": "ollama-cloud",
+  "providers": {
+    "ollama-cloud": {
+      "base_url": "https://ollama.com/v1",
+      "key": "dpapi:ollama-cloud.dat",
+      "model": "deepseek-v4-flash"
+    },
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/v1",
+      "key": "dpapi:deepseek.dat",
+      "model": "deepseek-chat"
+    },
+    "mimo": {
+      "base_url": "https://api.siliconflow.cn/v1",
+      "key": "dpapi:mimo.dat",
+      "model": "XiaomiMiMo/MiMo-7B-RL"
+    }
+  },
+  "embeddings": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "key": "dpapi:siliconflow.dat",
+    "model": "BAAI/bge-m3",
+    "_note": "cloud fallback when no local Ollama; same bge-m3 = same vector space"
+  },
+  "_setup": "setup.ps1 会引导你保存密钥；只需配置你实际拥有的服务，default 指向它即可"
+}

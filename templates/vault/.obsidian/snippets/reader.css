@@ -1,0 +1,36 @@
+/* reader.css — 微信读书-style reading comfort for notes tagged as books.
+   Applies to reading view; tuned for phone screens. */
+.markdown-preview-view {
+  --file-line-width: 42em;
+}
+.markdown-preview-view p {
+  font-size: 1.12em;
+  line-height: 2.0;
+  letter-spacing: 0.02em;
+  text-align: justify;
+  font-family: "Songti SC", "Noto Serif CJK SC", "SimSun", Georgia, serif;
+}
+/* highlights = the reading marker */
+.markdown-preview-view mark,
+.markdown-preview-view .cm-highlight {
+  background: linear-gradient(transparent 55%, #cbe7b0 55% 94%, transparent 94%);
+  color: inherit;
+  padding: 0 1px;
+}
+/* footnote quote blocks: small and quiet */
+.markdown-preview-view blockquote {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  border-left: 2px solid var(--background-modifier-border);
+}
+/* page markers: subtle inline 页码, 微信读书-style */
+.markdown-preview-view .pg::after,
+.markdown-rendered .pg::after {
+  content: "﹝" attr(data-p) "﹞";
+  font-size: 0.68em;
+  color: var(--text-faint);
+  vertical-align: super;
+  letter-spacing: 0;
+  margin: 0 2px;
+  user-select: none;
+}

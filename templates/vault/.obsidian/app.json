@@ -1,0 +1,8 @@
+{
+  "attachmentFolderPath": "90-Attachments",
+  "alwaysUpdateLinks": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "00-Inbox",
+  "useMarkdownLinks": false,
+  "showUnsupportedFiles": true
+}
