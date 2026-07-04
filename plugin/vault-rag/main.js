@@ -3,7 +3,7 @@
  * Backend: scripts/rag.py serve  (POST {q, provider?, k?} -> {answer, sources}) */
 'use strict';
 
-const { Plugin, ItemView, PluginSettingTab, Setting, requestUrl, Notice, MarkdownRenderer, Modal, FuzzySuggestModal, MarkdownView, Menu } = require('obsidian');
+const { Plugin, ItemView, PluginSettingTab, Setting, requestUrl, Notice, MarkdownRenderer, Modal, FuzzySuggestModal, MarkdownView, Menu, Platform } = require('obsidian');
 
 /* 跳转页码: fuzzy picker over all page markers in the active note */
 class PageJumpModal extends FuzzySuggestModal {
@@ -62,6 +62,8 @@ class AnnotateModal extends Modal {
 const VIEW_TYPE = 'vault-rag-view';
 
 const DEFAULTS = {
+  // Comma-separated list — settings sync with the vault, so listing BOTH the
+  // PC-local and the LAN address makes the same config work on every device.
   endpoint: 'http://localhost:8766',
   provider: '',
   topK: 6,
@@ -114,14 +116,15 @@ class RagView extends ItemView {
     try {
       const body = { q, k: s.topK };
       if (s.provider) body.provider = s.provider;
+      const base = await this.plugin.resolveEndpoint();
       const r = await requestUrl({
-        url: s.endpoint.replace(/\/$/, ''),
+        url: base,
         method: 'POST',
         contentType: 'application/json',
         body: JSON.stringify(body),
         throw: false,
       });
-      if (r.status !== 200) throw new Error((r.json && r.json.error) || `HTTP ${r.status}`);
+      if (r.status !== 200) { this.plugin._goodEp = null; throw new Error((r.json && r.json.error) || `HTTP ${r.status}`); }
       const { answer, sources, provider } = r.json;
       a.empty();
       await MarkdownRenderer.render(this.app, answer, a.createDiv(), '', this.plugin);
@@ -157,7 +160,7 @@ class RagView extends ItemView {
         });
       });
     } catch (e) {
-      a.setText(`⚠️ ${e.message} — 确认电脑上已运行 python scripts\\rag.py serve，且设置里的地址可达。`);
+      a.setText(`⚠️ ${e.message}`);
     }
     this.log.scrollTo({ top: this.log.scrollHeight });
   }
@@ -168,10 +171,21 @@ class RagSettingTab extends PluginSettingTab {
   display() {
     const c = this.containerEl;
     c.empty();
-    new Setting(c).setName('RAG 服务地址')
-      .setDesc('电脑上运行 python scripts/rag.py serve 后的地址。手机填电脑的局域网 IP，如 http://192.168.1.5:8766')
+    new Setting(c).setName('RAG 服务地址（可填多个，逗号分隔）')
+      .setDesc('插件按顺序尝试，自动选可用的。推荐同时填电脑本机和局域网地址，例如：http://localhost:8766, http://192.168.1.5:8766 —— 这样同一份设置在电脑和手机上都能用（设置随 vault 同步）')
       .addText(t => t.setValue(this.plugin.settings.endpoint)
-        .onChange(async v => { this.plugin.settings.endpoint = v.trim(); await this.plugin.saveSettings(); }));
+        .onChange(async v => { this.plugin.settings.endpoint = v.trim(); this.plugin._goodEp = null; await this.plugin.saveSettings(); }));
+    new Setting(c).setName('测试连接')
+      .setDesc('逐个探测上面的地址')
+      .addButton(b => b.setButtonText('测试').setCta().onClick(async () => {
+        b.setButtonText('测试中…');
+        try {
+          const ep = await this.plugin.resolveEndpoint(true);
+          const r = await requestUrl({ url: ep + '/health', method: 'GET' });
+          new Notice(`✅ 已连接 ${ep} — 知识库 ${r.json.chunks} 条`);
+        } catch (e) { new Notice('⚠️ ' + e.message, 10000); }
+        b.setButtonText('测试');
+      }));
     new Setting(c).setName('回答模型 provider')
       .setDesc('留空用服务端默认；可填 deepseek / mimo / ollama-cloud（需在 .rag/providers.json 配置）')
       .addText(t => t.setValue(this.plugin.settings.provider)
@@ -246,13 +260,14 @@ module.exports = class RagPlugin extends Plugin {
       callback: async () => {
         new Notice('重建索引中…');
         try {
+          const base = await this.resolveEndpoint();
           const r = await requestUrl({
-            url: this.settings.endpoint.replace(/\/$/, ''), method: 'POST',
+            url: base, method: 'POST',
             contentType: 'application/json', body: JSON.stringify({ cmd: 'rebuild' }), throw: false,
           });
-          if (r.status !== 200) throw new Error((r.json && r.json.error) || 'HTTP ' + r.status);
+          if (r.status !== 200) { this._goodEp = null; throw new Error((r.json && r.json.error) || 'HTTP ' + r.status); }
           new Notice(`✅ 索引已更新：${r.json.chunks} 条`);
-        } catch (e) { new Notice('⚠️ ' + e.message); }
+        } catch (e) { new Notice('⚠️ ' + e.message, 8000); }
       },
     });
 
@@ -298,6 +313,13 @@ module.exports = class RagPlugin extends Plugin {
     this.registerDomEvent(document, 'mousedown', (e) => {
       if (!this.selBar.contains(e.target)) this.hideSelBar();
     });
+    this.registerDomEvent(document, 'touchstart', (e) => {
+      if (!this.selBar.contains(e.target)) this.hideSelBar();
+    });
+    // touch: tap the toolbar buttons via touchend (mousedown may not fire)
+    this.selBar.querySelectorAll('button').forEach(b => {
+      b.addEventListener('touchend', (e) => { e.preventDefault(); e.stopPropagation(); b.dispatchEvent(new MouseEvent('mousedown')); });
+    });
   }
 
   maybeShowSelBar() {
@@ -310,12 +332,30 @@ module.exports = class RagPlugin extends Plugin {
     try {
       const rect = sel.getRangeAt(0).getBoundingClientRect();
       this.selBar.style.display = 'flex';
-      this.selBar.style.left = Math.max(8, rect.left + rect.width / 2 - 78) + 'px';
-      this.selBar.style.top = Math.max(8, rect.top - 46) + 'px';
+      this.selBar.style.left = Math.max(8, Math.min(window.innerWidth - 170, rect.left + rect.width / 2 - 78)) + 'px';
+      // mobile: native selection menu sits above the selection — go below it
+      this.selBar.style.top = (Platform.isMobile
+        ? Math.min(window.innerHeight - 60, rect.bottom + 14)
+        : Math.max(8, rect.top - 46)) + 'px';
     } catch (e) { this.hideSelBar(); }
   }
 
   hideSelBar() { if (this.selBar) this.selBar.style.display = 'none'; }
+
+  /* Try each configured endpoint (comma-separated) until one answers /health.
+     Cached per session; cache cleared on request failure. */
+  async resolveEndpoint(force) {
+    if (this._goodEp && !force) return this._goodEp;
+    const eps = (this.settings.endpoint || '').split(/[,;\s，；]+/).map(e => e.trim().replace(/\/$/, '')).filter(Boolean);
+    for (const ep of eps) {
+      try {
+        const r = await requestUrl({ url: ep + '/health', method: 'GET', throw: false });
+        if (r.status === 200) { this._goodEp = ep; return ep; }
+      } catch (e) { /* try next */ }
+    }
+    throw new Error(`无法连接 RAG 服务（已尝试：${eps.join('、') || '（未配置地址）'}）。` +
+      `确认电脑上运行着 python scripts\\rag.py serve；手机需在设置里加上电脑的局域网地址。`);
+  }
 
   async jumpToPage() {
     const { workspace } = this.app;

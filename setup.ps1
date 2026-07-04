@@ -69,7 +69,24 @@ New-Item -ItemType Directory -Force "$Target\.rag" | Out-Null
 if (-not (Test-Path "$Target\.rag\providers.json")) { Copy-Item "$kit\templates\rag\providers.json" "$Target\.rag\" }
 Write-Host "   ✅ Claude 技能 / 配置模板已就位"
 
-# ---------- 4. 下一步 ----------
+# ---------- 4. 局域网（手机访问用） ----------
+$lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).IPAddress
+try {
+    if (-not (Get-NetFirewallRule -DisplayName 'Reading Kit RAG' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName 'Reading Kit RAG' -Direction Inbound -LocalPort 8766 -Protocol TCP -Action Allow -ErrorAction Stop | Out-Null
+        Write-Host "`n4️⃣  防火墙：已放行 8766 端口（手机访问 AI 问答用）"
+    } else { Write-Host "`n4️⃣  防火墙规则已存在" }
+} catch {
+    Write-Host "`n4️⃣  ⚠️ 无法自动放行端口（需管理员）。手机连不上 AI 时，用管理员 PowerShell 运行：" -ForegroundColor Yellow
+    Write-Host "   New-NetFirewallRule -DisplayName 'Reading Kit RAG' -Direction Inbound -LocalPort 8766 -Protocol TCP -Action Allow"
+}
+if ($lanIP) {
+    Write-Host "   📱 本机局域网地址：http://${lanIP}:8766"
+    Write-Host "   → Obsidian 插件设置「RAG 服务地址」填：http://localhost:8766, http://${lanIP}:8766"
+    Write-Host "     （两个都填，设置随 vault 同步后手机电脑通用）"
+}
+
+# ---------- 5. 下一步 ----------
 Write-Host "`n🎉 安装完成！接下来：" -ForegroundColor Green
 Write-Host "   1. Obsidian → Open folder as vault → $Target\vault"
 Write-Host "      （Settings → Community plugins → 关闭 Restricted mode → 启用 Vault RAG）"

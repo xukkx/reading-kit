@@ -30,3 +30,8 @@
 .vrag-selbar button { border: 0; background: transparent; font-size: 0.9em; font-weight: 600;
                       padding: 4px 10px; border-radius: 7px; cursor: pointer; }
 .vrag-selbar button:hover { background: var(--background-secondary); color: var(--text-accent); }
+/* mobile: thumb-sized targets, below-selection placement handled in JS */
+.is-mobile .vrag-selbar { border-radius: 14px; padding: 6px 8px; }
+.is-mobile .vrag-selbar button { padding: 10px 16px; font-size: 1.05em; }
+.is-mobile .vrag-input { font-size: 1.05em; }
+.is-mobile .vrag-send { min-width: 64px; padding: 12px; }

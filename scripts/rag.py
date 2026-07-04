@@ -169,6 +169,20 @@ def cmd_serve(port):
     from http.server import HTTPServer, BaseHTTPRequestHandler
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
+
+        def do_GET(self):
+            try:
+                n = len(json.loads((RAG / "index.json").read_text(encoding="utf-8"))["chunks"])
+            except Exception:
+                n = 0
+            data = json.dumps({"ok": True, "chunks": n}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_POST(self):
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n))
