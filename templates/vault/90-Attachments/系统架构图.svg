@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 600" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#555"/>
+    </marker>
+    <marker id="a2" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#4a6fa5"/>
+    </marker>
+  </defs>
+  <style>
+    .zone{rx:14;stroke-width:1.6}
+    .node{fill:#fff;stroke-width:1.2;rx:9}
+    .t{font-size:15px;fill:#2b322c}
+    .s{font-size:12px;fill:#79837a}
+    .zt{font-size:15px;font-weight:700}
+    .lbl{font-size:12px;fill:#555}
+    .edge{stroke:#555;stroke-width:1.5;fill:none;marker-end:url(#a)}
+    .dash{stroke-dasharray:6 4}
+    .dot{stroke:#4a6fa5;stroke-width:1.6;stroke-dasharray:2 4;fill:none;marker-end:url(#a2)}
+  </style>
+
+  <!-- ☁️ 云端 -->
+  <rect class="zone" x="18" y="60" width="192" height="470" fill="#faf3e8" stroke="#b8860b"/>
+  <text class="zt" x="34" y="88" fill="#8a6508">☁️ 云端</text>
+  <text class="s" x="34" y="106">只出力 · 不存你的数据</text>
+  <rect class="node" x="34" y="160" width="160" height="58" stroke="#b8860b"/>
+  <text class="t" x="114" y="184" text-anchor="middle">PaddleOCR</text>
+  <text class="s" x="114" y="203" text-anchor="middle">整本书 OCR</text>
+  <rect class="node" x="34" y="430" width="160" height="58" stroke="#b8860b"/>
+  <text class="t" x="114" y="454" text-anchor="middle">回答大模型</text>
+  <text class="s" x="114" y="473" text-anchor="middle">DeepSeek / Ollama…可换</text>
+
+  <!-- 🖥️ 电脑 -->
+  <rect class="zone" x="240" y="60" width="292" height="470" fill="#eef7ee" stroke="#3d6b54"/>
+  <text class="zt" x="256" y="88" fill="#2e5240">🖥️ 你的电脑（厨房）</text>
+  <text class="s" x="256" y="106">做书 · 存原本 · 开 AI 服务</text>
+  <rect class="node" x="330" y="120" width="130" height="46" stroke="#3d6b54"/>
+  <text class="t" x="395" y="149" text-anchor="middle">📄 PDF</text>
+  <rect class="node" x="315" y="196" width="160" height="56" stroke="#3d6b54"/>
+  <text class="t" x="395" y="219" text-anchor="middle">⚙️ 流水线</text>
+  <text class="s" x="395" y="238" text-anchor="middle">OCR→校验→重排成书</text>
+  <rect class="node" x="315" y="282" width="160" height="56" stroke="#3d6b54"/>
+  <text class="t" x="395" y="305" text-anchor="middle">📁 vault（原本）</text>
+  <text class="s" x="395" y="324" text-anchor="middle">书·笔记·批注·插件</text>
+  <rect class="node" x="315" y="368" width="160" height="50" stroke="#3d6b54"/>
+  <text class="t" x="395" y="399" text-anchor="middle">Obsidian 电脑端</text>
+  <rect class="node" x="315" y="448" width="160" height="60" stroke="#3d6b54"/>
+  <text class="t" x="395" y="472" text-anchor="middle">🧠 rag.py serve</text>
+  <text class="s" x="395" y="491" text-anchor="middle">AI 问答 :8766（本地嵌入）</text>
+
+  <line class="edge" x1="395" y1="166" x2="395" y2="196"/>
+  <line class="edge" x1="395" y1="252" x2="395" y2="282"/>
+  <line class="edge" x1="395" y1="338" x2="395" y2="368"/>
+  <line class="edge" x1="395" y1="418" x2="395" y2="448"/>
+  <text class="lbl" x="404" y="438">问 / 检索笔记</text>
+
+  <path class="edge dash" d="M 194 189 H 315" stroke="#b8860b"/>
+  <text class="lbl" x="212" y="182">按页转录</text>
+  <path class="edge dash" d="M 194 459 H 315" stroke="#b8860b"/>
+  <text class="lbl" x="212" y="452">生成回答</text>
+
+  <!-- 🥜 坚果云 -->
+  <rect class="zone" x="576" y="230" width="150" height="120" fill="#f5eef7" stroke="#8b5a8b"/>
+  <text class="zt" x="592" y="258" fill="#6d3f6d">🥜 坚果云</text>
+  <rect class="node" x="590" y="276" width="122" height="56" stroke="#8b5a8b"/>
+  <text class="t" x="651" y="299" text-anchor="middle">vault 副本</text>
+  <text class="s" x="651" y="318" text-anchor="middle">连插件带说明书</text>
+
+  <line class="edge" x1="475" y1="298" x2="590" y2="298"/>
+  <line class="edge" x1="590" y1="312" x2="475" y2="312"/>
+  <text class="lbl" x="486" y="290">remotely-save 同步</text>
+
+  <!-- 📱 手机 -->
+  <rect class="zone" x="756" y="60" width="166" height="470" fill="#eef3fa" stroke="#4a6fa5"/>
+  <text class="zt" x="772" y="88" fill="#33517d">📱 手机 / 平板</text>
+  <text class="s" x="772" y="106">餐厅：只管舒服地读</text>
+  <rect class="node" x="772" y="180" width="134" height="52" stroke="#4a6fa5"/>
+  <text class="t" x="839" y="202" text-anchor="middle">vault（副本）</text>
+  <text class="s" x="839" y="221" text-anchor="middle">自动跟原本一致</text>
+  <rect class="node" x="772" y="300" width="134" height="70" stroke="#4a6fa5"/>
+  <text class="t" x="839" y="325" text-anchor="middle">Obsidian App</text>
+  <text class="s" x="839" y="344" text-anchor="middle">📖 读书·划线批注</text>
+  <text class="s" x="839" y="361" text-anchor="middle">跳页码·问AI</text>
+  <line class="edge" x1="839" y1="232" x2="839" y2="300"/>
+
+  <path class="edge" d="M 726 288 C 748 270, 752 240, 772 216"/>
+  <path class="edge" d="M 776 226 C 756 250, 752 270, 730 296"/>
+
+  <!-- 问AI dotted -->
+  <path class="dot" d="M 772 340 C 620 380, 560 430, 479 462"/>
+  <text class="lbl" x="560" y="415" fill="#4a6fa5">❓问AI：同一 Wi-Fi + 电脑开着</text>
+
+  <!-- legend -->
+  <line x1="34" y1="562" x2="74" y2="562" stroke="#555" stroke-width="1.5"/>
+  <text class="s" x="82" y="566">随时可用</text>
+  <line x1="170" y1="562" x2="210" y2="562" stroke="#b8860b" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="s" x="218" y="566">需要网络（外包出力）</text>
+  <line x1="370" y1="562" x2="410" y2="562" stroke="#4a6fa5" stroke-width="1.6" stroke-dasharray="2 4"/>
+  <text class="s" x="418" y="566">有条件：家里 Wi-Fi 且电脑开机</text>
+</svg>
