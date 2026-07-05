@@ -1,7 +1,7 @@
 {
   "id": "vault-rag",
   "name": "Vault RAG 知识库问答",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "minAppVersion": "1.4.0",
   "description": "边读边问：对选中的文字或任意问题，检索本地知识库并由可配置的 LLM 作答（带来源引用）。",
   "author": "xukkx + Claude",

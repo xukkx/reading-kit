@@ -67,6 +67,9 @@ const DEFAULTS = {
   endpoint: 'http://localhost:8766',
   provider: '',
   topK: 6,
+  // Desktop only: command run once per session when no endpoint answers /health,
+  // e.g.  wscript.exe "D:\MyProject\start_rag_server.vbs"
+  autostartCmd: '',
 };
 
 class RagView extends ItemView {
@@ -186,6 +189,10 @@ class RagSettingTab extends PluginSettingTab {
         } catch (e) { new Notice('⚠️ ' + e.message, 10000); }
         b.setButtonText('测试');
       }));
+    new Setting(c).setName('自动启动命令（仅电脑端）')
+      .setDesc('连接失败时自动运行的命令，用来拉起 RAG 服务。推荐指向项目里的启动脚本，例如：wscript.exe "D:\\MyProject\\start_rag_server.vbs"。留空则不自动启动；手机端忽略此项。')
+      .addText(t => t.setValue(this.plugin.settings.autostartCmd)
+        .onChange(async v => { this.plugin.settings.autostartCmd = v.trim(); await this.plugin.saveSettings(); }));
     new Setting(c).setName('回答模型 provider')
       .setDesc('留空用服务端默认；可填 deepseek / mimo / ollama-cloud（需在 .rag/providers.json 配置）')
       .addText(t => t.setValue(this.plugin.settings.provider)
@@ -347,14 +354,44 @@ module.exports = class RagPlugin extends Plugin {
   async resolveEndpoint(force) {
     if (this._goodEp && !force) return this._goodEp;
     const eps = (this.settings.endpoint || '').split(/[,;\s，；]+/).map(e => e.trim().replace(/\/$/, '')).filter(Boolean);
-    for (const ep of eps) {
-      try {
-        const r = await requestUrl({ url: ep + '/health', method: 'GET', throw: false });
-        if (r.status === 200) { this._goodEp = ep; return ep; }
-      } catch (e) { /* try next */ }
+    const probe = async () => {
+      for (const ep of eps) {
+        try {
+          const r = await requestUrl({ url: ep + '/health', method: 'GET', throw: false });
+          if (r.status === 200) { this._goodEp = ep; return ep; }
+        } catch (e) { /* try next */ }
+      }
+      return null;
+    };
+    let ep = await probe();
+    if (!ep && await this.tryAutostart()) {
+      // give the server a moment to come up, then re-probe a few times
+      for (let i = 0; i < 8 && !ep; i++) {
+        await new Promise(res => setTimeout(res, 1000));
+        ep = await probe();
+      }
+      if (ep) new Notice('✅ RAG 服务已自动启动');
     }
+    if (ep) return ep;
     throw new Error(`无法连接 RAG 服务（已尝试：${eps.join('、') || '（未配置地址）'}）。` +
       `确认电脑上运行着 python scripts\\rag.py serve；手机需在设置里加上电脑的局域网地址。`);
+  }
+
+  /* Desktop only: launch the configured server command, once per session.
+     Node APIs are unavailable on mobile, so everything stays behind guards —
+     on phones this quietly does nothing and the plugin remains mobile-safe. */
+  async tryAutostart() {
+    const cmd = (this.settings.autostartCmd || '').trim();
+    if (!cmd || Platform.isMobile || this._autostarted) return false;
+    this._autostarted = true;   // one attempt per session; no spawn loops
+    try {
+      new Notice('RAG 服务未运行，正在自动启动…');
+      require('child_process').exec(cmd, { windowsHide: true });
+      return true;
+    } catch (e) {
+      new Notice('⚠️ 自动启动失败：' + e.message, 8000);
+      return false;
+    }
   }
 
   async jumpToPage() {
