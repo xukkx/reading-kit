@@ -166,7 +166,7 @@ def cmd_ask(q, provider=None, k=6):
 # ---------- serve (LAN endpoint for the Obsidian plugin) ----------
 
 def cmd_serve(port):
-    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
 
@@ -211,7 +211,9 @@ def cmd_serve(port):
             self.end_headers()
             self.wfile.write(data)
     print(f"RAG endpoint: POST http://0.0.0.0:{port}  body: {{\"q\": \"问题\"}}")
-    HTTPServer(("0.0.0.0", port), H).serve_forever()
+    # ThreadingHTTPServer: a single wedged client connection must not block
+    # every other request (with the plain HTTPServer even /health hangs).
+    ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
