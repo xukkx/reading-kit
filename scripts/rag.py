@@ -22,6 +22,14 @@ a single-collection vault with no Books/ nesting at all — falls into "default"
 existing vaults work unchanged. Each collection gets its own
 .rag/<collection>/{index.json,vectors.npy} — rebuilding one never touches another.
 
+Interaction memory (optional, needs kb_substrate installed -- see substrate_build.py):
+  POST /remember {kind: "qa"|"annotation", payload: {...}, linked_atom_ids?: [...]}
+  GET  /recall?kind=qa&since=...&limit=20 -> structured Q&A/annotation history,
+  where today reading-kit only appends to plain markdown logs that are never
+  read back (AI问答存档.md, 批注.md). Retrieval (build/ask) does NOT read from
+  kb_substrate yet -- atoms have no collection attribution and would duplicate
+  already-reflowed vault content; that's a follow-up once that mapping exists.
+
 Usage:
   python rag.py build [--collection X]        # (re)index; omit --collection to (re)build all
   python rag.py ask "问题" [--collection X] [--provider deepseek] [-k 6]
@@ -40,6 +48,27 @@ VAULT = ROOT / "vault"
 RAG = ROOT / ".rag"
 EMBED_MODEL = "bge-m3"
 OLLAMA_LOCAL = "http://localhost:11434"
+
+# ---------- kb_substrate (interaction memory: /remember, /recall) ----------
+# kb_substrate is an optional dependency (pip install -e "Personal Research OS"),
+# imported lazily inside the /remember and /recall handlers only, so build/ask/serve
+# keep working on a machine that hasn't set it up.
+
+SUBSTRATE_DB = RAG / "kb.sqlite3"
+
+def substrate_project_id():
+    """Same registry-slug lookup as substrate_build.py's project_id() -- kept as
+    a duplicate here rather than a shared import, per this repo's convention that
+    scripts never import each other, only pass data via the filesystem."""
+    registry = Path.home() / ".reading-kit" / "registry.json"
+    try:
+        projects = json.loads(registry.read_text(encoding="utf-8"))["projects"]
+        for p in projects:
+            if Path(p["path"]).resolve() == ROOT.resolve():
+                return p["slug"]
+    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        pass
+    return ROOT.name
 
 # ---------- providers ----------
 
@@ -227,11 +256,34 @@ def cmd_ask(q, provider=None, k=6, collection=DEFAULT_COLLECTION):
 # ---------- serve (LAN endpoint for the Obsidian plugin) ----------
 
 def cmd_serve(port):
+    RAG.mkdir(exist_ok=True)
     from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
 
         def do_GET(self):
+            from urllib.parse import urlsplit, parse_qs
+            path = urlsplit(self.path).path
+            if path == "/recall":
+                try:
+                    import kb_substrate
+                    qs = parse_qs(urlsplit(self.path).query)
+                    filters = {}
+                    if "kind" in qs: filters["kind"] = qs["kind"][0]
+                    if "since" in qs: filters["since"] = qs["since"][0]
+                    if "limit" in qs: filters["limit"] = int(qs["limit"][0])
+                    results = kb_substrate.query_interactions(str(SUBSTRATE_DB), substrate_project_id(), filters)
+                    data = json.dumps({"ok": True, "interactions": results}, ensure_ascii=False).encode()
+                    self.send_response(200)
+                except Exception as e:
+                    data = json.dumps({"error": str(e)}).encode()
+                    self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             cols = list_collections()
             counts = {}
             for c in cols:
@@ -248,8 +300,27 @@ def cmd_serve(port):
             self.wfile.write(data)
 
         def do_POST(self):
+            from urllib.parse import urlsplit
+            path = urlsplit(self.path).path
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n))
+            if path == "/remember":
+                try:
+                    import kb_substrate
+                    interaction_id = kb_substrate.record_interaction(
+                        str(SUBSTRATE_DB), substrate_project_id(),
+                        body["kind"], body.get("payload", {}), body.get("linked_atom_ids"))
+                    data = json.dumps({"ok": True, "interaction_id": interaction_id}).encode()
+                    self.send_response(200)
+                except Exception as e:
+                    data = json.dumps({"error": str(e)}).encode()
+                    self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             try:
                 if body.get("cmd") == "rebuild":
                     # collection omitted or "*" -> rebuild everything; else scoped to just that one

@@ -55,6 +55,7 @@ class AnnotateModal extends Modal {
     else await vault.create(notePath,
       `---\ntags: [annotations]\n---\n\n# ${this.file.parent.name} · 批注\n\n来源：[[${this.file.basename}]]\n${entry}`);
     new Notice(`已保存批注${page ? ` (p.${page})` : ''}`);
+    this.plugin.remember('annotation', { quote: this.quote, comment, file: this.file.path, page });
     this.close();
   }
 }
@@ -144,6 +145,10 @@ class RagView extends ItemView {
         else await this.app.vault.create(path, `---\ntags: [ai-qa]\n---\n\n# AI 问答存档\n${entry}`);
         save.setText('✅ 已存');
         new Notice('已存入 00-Inbox/AI问答存档');
+        this.plugin.remember('qa', {
+          question: q, answer, provider, collection,
+          sources: (sources || []).map(h => ({ file: h.file, page: h.page })),
+        });
       });
       meta.createSpan({ text: `来源（${provider}）：` });
       (sources || []).forEach((h, i) => {
@@ -391,6 +396,22 @@ module.exports = class RagPlugin extends Plugin {
       new Notice('⚠️ 自动启动失败：' + e.message, 8000);
       return false;
     }
+  }
+
+  /* Best-effort structured memory: POSTs alongside the existing markdown write
+     (批注.md / AI问答存档.md), never in place of it. Silently no-ops if the
+     server or kb_substrate isn't available — this is enrichment, not the
+     source of truth, so it must never disrupt the primary save flow. */
+  async remember(kind, payload, linkedAtomIds) {
+    try {
+      const base = await this.resolveEndpoint();
+      await requestUrl({
+        url: base + '/remember', method: 'POST',
+        contentType: 'application/json',
+        body: JSON.stringify({ kind, payload, linked_atom_ids: linkedAtomIds || [] }),
+        throw: false,
+      });
+    } catch (e) { /* best-effort only */ }
   }
 
   /* The reading view, robust to focus being on a ribbon/sidebar/panel instead
