@@ -31,7 +31,8 @@ Interaction memory (optional, needs kb_substrate installed -- see substrate_buil
   already-reflowed vault content; that's a follow-up once that mapping exists.
 
 Usage:
-  python rag.py build [--collection X]        # (re)index; omit --collection to (re)build all
+  python rag.py build [--collection X] [--full]   # incremental (re)index via .rag/<c>/filecache.json;
+                                                  # --full ignores the cache; omit --collection for all
   python rag.py ask "问题" [--collection X] [--provider deepseek] [-k 6]
   python rag.py serve [--port 8766]           # LAN HTTP endpoint; collection comes per-request
 """
@@ -173,7 +174,106 @@ def chunk_file(path):
     flush()
     return chunks
 
-def cmd_build(collection=None):
+def read_json(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+def atomic_save(path, data):
+    """Write to a temp name in the same dir, then os.replace() — no torn files.
+    data is an ndarray (saved as .npy) or bytes."""
+    tmp = path.with_name(path.name + ".tmp")
+    if isinstance(data, np.ndarray):
+        with open(tmp, "wb") as fh:
+            np.save(fh, data)
+    else:
+        tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+def prev_state(cdir, name):
+    """Previous (chunks, vectors) iff index.json/vectors.npy are intact, aligned,
+    and were built with the current embedder; (None, None) forces a full rebuild."""
+    idx = read_json(cdir / "index.json")
+    try:
+        mat = np.load(cdir / "vectors.npy")
+    except Exception:
+        return None, None
+    if (idx and idx.get("embed_model") == EMBED_MODEL and idx.get("backend") == name
+            and isinstance(idx.get("chunks"), list) and mat.ndim == 2
+            and len(idx["chunks"]) == mat.shape[0]):
+        return idx["chunks"], mat
+    return None, None
+
+def build_collection(c, files, name, embed, full):
+    """Incrementally (re)index one collection. files: sorted [(rel, path), ...].
+    Unchanged files (sha256 hit in filecache.json + present in the old index)
+    reuse their chunks and vector rows; only new/changed files get embedded;
+    deleted files' rows are dropped. Any cache/index/model mismatch -> full rebuild."""
+    cdir = RAG / c
+    cdir.mkdir(exist_ok=True)
+    cache = read_json(cdir / "filecache.json") or {}
+    old_files = cache.get("files") if isinstance(cache.get("files"), dict) else {}
+    prev_chunks = prev_mat = None
+    if not full and cache.get("embed_model") == EMBED_MODEL and cache.get("backend") == name:
+        prev_chunks, prev_mat = prev_state(cdir, name)
+    prev_rows = {}  # rel -> old row indices, in original per-file chunk order
+    for i, ck in enumerate(prev_chunks or []):
+        prev_rows.setdefault(ck["file"], []).append(i)
+
+    cur, order, new_by_file, reused_chunks = {}, [], {}, 0
+    for rel, path in files:
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        cur[rel] = sha
+        if prev_chunks is not None and old_files.get(rel) == sha and rel in prev_rows:
+            order.append((rel, True))
+            reused_chunks += len(prev_rows[rel])
+        else:
+            new_by_file[rel] = chunk_file(path)
+            order.append((rel, False))
+    removed = sum(1 for r in old_files if r not in cur)
+    new_flat = [ck for rel, hit in order if not hit for ck in new_by_file[rel]]
+
+    new_mat = None
+    if new_flat:
+        print(f"[{c}] {len(new_flat)} chunks, embedding with {name} ...")
+        vecs = []
+        for i in range(0, len(new_flat), 32):
+            vecs.append(embed([ck["text"] for ck in new_flat[i:i+32]]))
+            print(f"  [{c}] {min(i+32, len(new_flat))}/{len(new_flat)}", flush=True)
+        new_mat = np.vstack(vecs)
+        new_mat /= np.linalg.norm(new_mat, axis=1, keepdims=True) + 1e-9
+        if reused_chunks and new_mat.shape[1] != prev_mat.shape[1]:
+            print(f"[{c}] vector dims changed ({prev_mat.shape[1]} -> {new_mat.shape[1]}), full rebuild")
+            return build_collection(c, files, name, embed, True)
+
+    print(f"[build] {c}: reused {len(order) - len(new_by_file)} files ({reused_chunks} chunks), "
+          f"embedded {len(new_by_file)} files ({len(new_flat)} chunks), removed {removed} files")
+
+    chunks, blocks, pos = [], [], 0  # assemble in sorted-file order; rows stay chunk-aligned
+    for rel, hit in order:
+        if hit:
+            idxs = prev_rows[rel]
+            chunks.extend(prev_chunks[i] for i in idxs)
+            blocks.append(prev_mat[idxs])
+        elif cks := new_by_file[rel]:
+            chunks.extend(cks)
+            blocks.append(new_mat[pos:pos + len(cks)])
+            pos += len(cks)
+    if not chunks:
+        print(f"[{c}] 0 chunks，跳过（文件夹里都是空文件？）")
+        return
+    mat = np.vstack(blocks)
+    atomic_save(cdir / "vectors.npy", mat)
+    atomic_save(cdir / "index.json", json.dumps(
+        {"embed_model": EMBED_MODEL, "backend": name, "chunks": chunks},
+        ensure_ascii=False).encode("utf-8"))
+    atomic_save(cdir / "filecache.json", json.dumps(
+        {"embed_model": EMBED_MODEL, "backend": name, "files": cur},
+        ensure_ascii=False).encode("utf-8"))
+    print(f"[{c}] index saved: {mat.shape[0]} vectors x {mat.shape[1]} dims")
+
+def cmd_build(collection=None, full=False):
     RAG.mkdir(exist_ok=True)
     name, embed = detect_embedder()
     collections = discover_collections()
@@ -185,30 +285,14 @@ def cmd_build(collection=None):
         c = file_collection(rel, collections)
         if collection and c != collection:
             continue
-        by_collection.setdefault(c, []).extend(chunk_file(f))
+        by_collection.setdefault(c, []).append((rel, f))
 
     if not by_collection:
         print(f"没有匹配的文件（collection={collection!r}），未写入任何索引")
         return
 
-    for c, chunks in sorted(by_collection.items()):
-        if not chunks:
-            print(f"[{c}] 0 chunks，跳过（文件夹里都是空文件？）")
-            continue
-        cdir = RAG / c
-        cdir.mkdir(exist_ok=True)
-        print(f"[{c}] {len(chunks)} chunks, embedding with {name} ...")
-        vecs = []
-        for i in range(0, len(chunks), 32):
-            vecs.append(embed([ck["text"] for ck in chunks[i:i+32]]))
-            print(f"  [{c}] {min(i+32, len(chunks))}/{len(chunks)}", flush=True)
-        mat = np.vstack(vecs)
-        mat /= np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9
-        np.save(cdir / "vectors.npy", mat)
-        (cdir / "index.json").write_text(json.dumps(
-            {"embed_model": EMBED_MODEL, "backend": name, "chunks": chunks},
-            ensure_ascii=False), encoding="utf-8")
-        print(f"[{c}] index saved: {mat.shape[0]} vectors x {mat.shape[1]} dims")
+    for c, files in sorted(by_collection.items()):
+        build_collection(c, files, name, embed, full)
 
 def list_collections():
     if not RAG.exists():
@@ -358,12 +442,13 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build"); b.add_argument("--collection", default=None)
+    b.add_argument("--full", action="store_true", help="ignore filecache.json, re-embed everything")
     a = sub.add_parser("ask"); a.add_argument("q"); a.add_argument("--provider"); a.add_argument("-k", type=int, default=6)
     a.add_argument("--collection", default=DEFAULT_COLLECTION)
     s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8766)
     args = ap.parse_args()
     if args.cmd == "build":
-        cmd_build(args.collection)
+        cmd_build(args.collection, args.full)
     elif args.cmd == "ask":
         ans, hits, pname = cmd_ask(args.q, args.provider, args.k, args.collection)
         print(f"—— 回答（{pname}）——\n{ans}\n\n—— 来源 ——")

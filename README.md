@@ -43,6 +43,7 @@ pwsh -File setup.ps1          # 或 powershell -File setup.ps1
 ```
 plugin/vault-rag/   Obsidian 插件：问答面板、划线批注、跳页码、选中弹条（手机可用）
 scripts/            流水线：paddle_ocr(整本OCR) → ingest(共识校验+台账) → reflow(重排) → rag(问答)
+WORKFLOWS.md        两大工作流：快速阅读(import_book 一条命令导入) / 学术精校(陪审团) 及升级策略
 skills/             Claude Code 技能：read-book / note / organize-vault
 templates/          vault 模板（含阅读排版CSS、使用说明）、CLAUDE.md、providers.json
 setup.ps1           一键安装
