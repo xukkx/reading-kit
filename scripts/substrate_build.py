@@ -12,13 +12,24 @@ Only pages that made it to verified/ (ingest.py's consensus already passed)
 are ingested here; adjudicate/escalated pages are out of scope until a human
 promotes them.
 
+--out (recommended): same convention as reflow.py's --out (e.g.
+"vault/Books/比较文学/比较文学论") — source_uri becomes the vault-relative
+book path ("Books/比较文学/比较文学论/正文.md") instead of the raw PDF/staging
+path, so rag.py's file_collection() can derive a collection from it later
+with no kb_substrate change. A staging slug that becomes more than one book
+(one PDF, several works) needs one invocation per book, scoped with
+--first/--last to that book's page range; omit both to apply --out to every
+page in the slug (the common single-book-per-slug case). Without --out at
+all, source_uri falls back to the ledger's raw source path (no collection
+attribution possible from it).
+
 Idempotent: staging/<slug>/substrate_ledger.jsonl records which page numbers
 have already been ingested (by atom_id), so re-running only picks up new
 pages. Use --force to re-ingest everything (creates new occurrence rows,
 kb_substrate never overwrites).
 
 Usage:
-  python scripts/substrate_build.py --slug yuedu-heji
+  python scripts/substrate_build.py --slug yuedu-heji --out "vault/Books/比较文学/比较文学论" --first 10 --last 32
   python scripts/substrate_build.py --slug yuedu-heji --force
 """
 import argparse, json, sys
@@ -27,8 +38,22 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parent.parent
+VAULT = ROOT / "vault"
 STAGING = ROOT / "staging"
 REGISTRY = Path.home() / ".reading-kit" / "registry.json"
+
+
+def book_source_uri(out_arg):
+    """Vault-relative book path matching reflow.py's --out convention and
+    rag.py's file_collection() expectations, e.g. "Books/比较文学/比较文学论/正文.md".
+    Falls back to the folder name if --out isn't actually under vault/."""
+    out_path = Path(out_arg)
+    out_path = out_path if out_path.is_absolute() else ROOT / out_path
+    try:
+        rel = out_path.resolve().relative_to(VAULT.resolve())
+    except ValueError:
+        rel = Path(out_path.name)
+    return str(rel / "正文.md").replace("\\", "/")
 
 
 def project_id():
@@ -82,6 +107,14 @@ def append_substrate_ledger(slug, rec):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--slug", required=True)
+    ap.add_argument("--out", default=None,
+                     help="vault-relative book folder, reflow.py's --out convention "
+                          "(e.g. vault/Books/比较文学/比较文学论) -- sets source_uri to "
+                          "the vault path instead of the raw PDF/staging path")
+    ap.add_argument("--first", type=int, default=None,
+                     help="first page --out applies to (default: every page in the slug)")
+    ap.add_argument("--last", type=int, default=None,
+                     help="last page --out applies to (default: every page in the slug)")
     ap.add_argument("--db", default=None, help="defaults to .rag/kb.sqlite3")
     ap.add_argument("--force", action="store_true", help="re-ingest pages already in substrate_ledger.jsonl")
     args = ap.parse_args()
@@ -124,10 +157,17 @@ def main():
             image_path = next((p for p in pages_dir.glob("pg-*.png")
                                 if int(p.stem.split("-")[1]) == page_number), None)
 
+        in_range = (args.first is None or page_number >= args.first) and \
+                   (args.last is None or page_number <= args.last)
+        if args.out and in_range:
+            source_uri = book_source_uri(args.out)
+        else:
+            source_uri = rec.get("source", f"staging/{args.slug}")
+
         atom_id = kb_substrate.ingest_verified_page(
             db_path=db_path,
             project_id=pid,
-            source_uri=rec.get("source", f"staging/{args.slug}"),
+            source_uri=source_uri,
             page_number=page_number,
             text=f.read_text(encoding="utf-8"),
             image_path=str(image_path) if image_path and image_path.exists() else None,
