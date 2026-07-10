@@ -37,3 +37,17 @@ python scripts\import_book.py --pdf D:\书.pdf --title 书名 --collection 分�
 - **PaddleOCR-VL 是共同骨干**：两条工作流第一步相同。快速阅读被门拦下后，`staging/<slug>/`（OCR 底稿、双模型转录、台账）原样保留、直接复用，不重复花钱。
 - **质量门失败（退出码 2）= 升级信号**：说明扫描质量或版式超出了共识校验的能力，这本书转入学术精校工作流处理。
 - 反向不成立：学术精校不走质量门，从头到尾人在环内。
+
+## 网页控制台（import_server.py）
+
+「快速阅读」导入的本地网页界面，浏览器里填表提交、看队列：
+
+```powershell
+python scripts\import_server.py                 # 默认端口 = 本项目 ragPort + 100（complit 8866 / zhangxianyi 8867；未注册项目 8830）
+python scripts\import_server.py --port 8888 --root D:\某个部署
+```
+
+- 打开 `http://localhost:<端口>/`：新书导入表单（PDF 下拉 + 手填路径、书名、合集、页码区间、校验阈值），三种模式：正式导入 / 演练（dry-run）/ 仅质检（gate-only）。
+- 任务**严格串行**排队执行（控制云端 OCR 花费与限速）；每个任务卡片上有实时日志和质量门报告（校验比、逐页失败原因表），门失败的书按上面的升级策略提示转入学术精校。
+- 任务状态与日志落盘在 `staging\_jobs\<id>\`（job.json + job.log），服务重启后历史仍在。
+- 它只是 `import_book.py` 的薄封装，不含任何新的管线逻辑：**CLI 始终可独立使用**。
