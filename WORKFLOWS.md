@@ -57,6 +57,15 @@ python scripts\import_batch.py D:\AI_Projects\Reading_Hub\Inbox --go   # 全部�
 - 目标项目：`--project`，或收件箱旁 `hub.json` 的 `defaultProject`。控制台没开：先启动，或 `--go --run` 就地串行执行。
 - **合订本不能批量**——单独用 `--first/--last` 拆书导入。
 
+用户甚至不必往 Inbox 放文件：把书堆积的文件夹登记进 `hub.json` 的 `sources`
+（`[{"path": "...", "collection": "女性文学"}]`），然后——
+
+```powershell
+python scripts\import_batch.py Inbox --scan        # 列候选：新 / 已在架 / 疑似已导入（按书名+字节大小双重去重）
+python scripts\import_batch.py Inbox --pull all    # 只把「新」书拉进收件箱（自动清洗 z-library 式文件名）
+python scripts\import_batch.py Inbox --pull 2=倾城之恋   # 或逐本挑选、顺手改书名
+```
+
 ## 网页控制台（import_server.py）
 
 「快速阅读」导入的本地网页界面，浏览器里填表提交、看队列：

@@ -56,11 +56,39 @@ server / import console are actually up (live port probe).
 Lead with attention items, not raw listings: pending 精校 pages, exit-2
 escalations, and servers that are down are what the reader needs to act on.
 
-## 2. Import routing — "把这本书导入 / 把 Inbox 清了"
+## 2. Import routing — "把这本书导入 / 把 Inbox 清了 / 有什么新书"
 
-**Many PDFs (the normal case): batch the whole Inbox.** The folder IS the
-metadata — `Inbox\<合集>\书名.pdf`; loose PDFs fall to `--collection`
-(default 未分类). Then:
+**Prime directive: the user NEVER moves files by hand.** All copying, renaming,
+and staging is yours. The only things you may ask the user are *knowledge*
+questions (which folder their books accumulate in, what a book should be
+titled, whether to spend OCR money) — never *operations*.
+
+**Decision tree (follow in order):**
+
+1. **Inbox has PDFs** → plan → confirm → `--go` (below).
+2. **Inbox empty** → discover from registered sources:
+   `python -X utf8 <kit>\scripts\import_batch.py <hub>\Inbox --scan`
+   — lists candidates from `hub.json`'s `sources`, deduped three ways
+   (title vs every shelf; byte-size vs every Input\/Inbox PDF — catches
+   renamed re-imports; already-in-inbox). Present the numbered list with
+   your recommendation (新 only), note per-book OCR cost (~50 min/200页
+   scanned), get ONE approval, then
+   `--pull all` (or `--pull N=更好的书名` per pick) → plan → `--go`.
+3. **`--scan` errors "no sources"** → ask the user ONCE where their book PDFs
+   accumulate (folders, drives), write them into `hub.json`
+   `sources: [{path, collection?}]` yourself, re-scan. A source with no
+   `collection` maps first-level subfolder names to collections.
+4. **Sources scanned, nothing 新, user still expects books** → they have
+   specific files in mind — ask for names/locations, register that folder as
+   a source for next time, pull, proceed.
+
+Never import PDFs that look unrelated to the library's subjects (courseware,
+slides, exam prep found in a broad source) without asking — flag them
+separately in the candidate list. When in doubt about a title, `--pull N=书名`
+with your best suggestion beats asking.
+
+**The Inbox convention** — the folder IS the metadata: `Inbox\<合集>\书名.pdf`;
+loose PDFs fall to `--collection` (default 未分类). Then:
 
 ```powershell
 python -X utf8 <kit>\scripts\import_batch.py <hub>\Inbox          # plan (always show this first)

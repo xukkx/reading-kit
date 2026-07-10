@@ -18,6 +18,20 @@ One command plans/executes the whole tree:
     python scripts/import_batch.py D:\AI_Projects\Reading_Hub\Inbox --go     # copy + submit to console queue
     python scripts/import_batch.py Inbox --go --run                          # no console: run serially here
 
+The user should NEVER move files by hand. Book sources (folders where PDFs
+naturally accumulate — download dirs, archive drives) are registered once in
+hub.json next to the Inbox:
+
+    {"defaultProject": "complit",
+     "sources": [{"path": "H:\\...\\女性文学材料包", "collection": "女性文学"}]}
+
+then discovery is automatic:
+
+    python scripts/import_batch.py Inbox --scan            # list candidates: 新 / 已在架 / 疑似已导入
+    python scripts/import_batch.py Inbox --pull all        # copy every 新 candidate into Inbox
+    python scripts/import_batch.py Inbox --pull 2=倾城之恋 --pull 3   # pick + retitle
+    # then the normal plan / --go flow above
+
 Behavior:
   * Books already on the shelf (vault/Books/<coll>/<title>/正文.md) are skipped
     (--force to re-import). The console additionally rejects duplicate queued
@@ -89,6 +103,108 @@ def clean_title(stem):
     t = re.sub(r'[<>:"/\\|?*]', " ", stem)
     t = re.sub(r"\s+", " ", t).strip(" .")
     return t
+
+
+def suggest_title(stem):
+    """Aggressive cleanup for DISCOVERED files (z-library junk, author parens,
+    trailing page ranges). Suggestions only — --pull N=标题 overrides."""
+    t = re.sub(r"[（(][^）)]*[）)]", " ", stem)        # any parenthesized group
+    t = re.sub(r"[\s_]*\d+\s*[-—]\s*\d+\s*$", " ", t)  # trailing page range
+    return clean_title(t)
+
+
+def load_hub(inbox):
+    cfg = inbox.parent / "hub.json"
+    if not cfg.exists():
+        return {}
+    try:
+        return json.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        sys.exit(f"[batch] hub.json unreadable: {e}")
+
+
+def known_pdf_sizes(inbox):
+    """Sizes of every PDF already inside the pipeline: hub Inbox (incl. _done)
+    + every registered project's Input/. Byte-size match = same file already
+    imported, even if it was renamed on the way in."""
+    sizes = set()
+    for pdf in inbox.rglob("*.pdf"):
+        sizes.add(pdf.stat().st_size)
+    for p in load_registry():
+        input_dir = Path(p["path"]) / "Input"
+        if input_dir.is_dir():
+            for pdf in input_dir.rglob("*.pdf"):
+                sizes.add(pdf.stat().st_size)
+    return sizes
+
+
+def shelved_titles():
+    """All book titles on any registered project's shelf (both vault shapes)."""
+    titles = set()
+    for p in load_registry():
+        books = Path(p["path"]) / "vault" / "Books"
+        if not books.is_dir():
+            continue
+        for cdir in books.iterdir():
+            if not cdir.is_dir():
+                continue
+            subdirs = [d for d in cdir.iterdir() if d.is_dir()]
+            titles.update(d.name for d in subdirs)
+            if not subdirs and any(cdir.glob("*.md")):
+                titles.add(cdir.name)
+    return titles
+
+
+def scan_sources(inbox, hub):
+    """Discover candidate PDFs in registered sources, dedup against everything
+    already in the pipeline. Deterministic order (source order, then path)."""
+    sources = hub.get("sources") or []
+    if not sources:
+        sys.exit("[batch] no sources in hub.json — add "
+                 '{"sources": [{"path": "...", "collection": "..."}]} '
+                 "(folders where the user's book PDFs accumulate)")
+    known_sizes = known_pdf_sizes(inbox)
+    shelf = shelved_titles()
+    candidates = []
+    for src in sources:
+        base = Path(src["path"])
+        if not base.is_dir():
+            print(f"[batch] ⚠ source missing, skipped: {base}", file=sys.stderr)
+            continue
+        for pdf in sorted(base.rglob("*.pdf")):
+            rel = pdf.relative_to(base)
+            coll = src.get("collection") or (rel.parts[0] if len(rel.parts) > 1
+                                             else "未分类")
+            title = suggest_title(pdf.stem)
+            if title in shelf or clean_title(pdf.stem) in shelf:
+                status = "已在架"
+            elif pdf.stat().st_size in known_sizes:
+                status = "疑似已导入"
+            else:
+                status = "新"
+            candidates.append({"pdf": pdf, "collection": coll, "title": title,
+                               "status": status,
+                               "mb": round(pdf.stat().st_size / 1e6, 1)})
+    return candidates
+
+
+def parse_pull(specs, candidates):
+    """--pull all | --pull N | --pull N=标题 (repeatable) → items to copy."""
+    if any(s.strip().lower() == "all" for s in specs):
+        return [c for c in candidates if c["status"] == "新"]
+    picked = []
+    for spec in specs:
+        m = re.match(r"^\s*(\d+)\s*(?:=(.+))?$", spec)
+        if not m:
+            sys.exit(f"[batch] bad --pull '{spec}' (use all / N / N=标题)")
+        idx = int(m.group(1))
+        if not 1 <= idx <= len(candidates):
+            sys.exit(f"[batch] --pull {idx}: out of range 1..{len(candidates)}")
+        item = dict(candidates[idx - 1])
+        if m.group(2):
+            item["title"] = clean_title(m.group(2).strip())
+        picked.append(item)
+    return picked
 
 
 def scan_inbox(inbox, default_collection):
@@ -164,6 +280,13 @@ def main():
                          "submitting to the console")
     ap.add_argument("--force", action="store_true",
                     help="include books already on the shelf")
+    ap.add_argument("--scan", action="store_true",
+                    help="discover candidate PDFs in hub.json sources (no copying)")
+    ap.add_argument("--pull", action="append", default=[], metavar="SPEC",
+                    help="copy scanned candidates into the inbox: all / N / N=标题 "
+                         "(repeatable; 'all' = every 新 candidate)")
+    ap.add_argument("--json", action="store_true",
+                    help="with --scan: machine-readable candidate list")
     args = ap.parse_args()
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -172,6 +295,37 @@ def main():
     inbox = Path(args.inbox or "Inbox").resolve()
     if not inbox.is_dir():
         sys.exit(f"[batch] inbox folder not found: {inbox}")
+
+    if args.scan or args.pull:
+        candidates = scan_sources(inbox, load_hub(inbox))
+        if args.scan:
+            if args.json:
+                print(json.dumps(
+                    [{**c, "pdf": str(c["pdf"])} for c in candidates],
+                    ensure_ascii=False, indent=1))
+            else:
+                if not candidates:
+                    print("[batch] sources scanned — no PDFs found")
+                for i, c in enumerate(candidates, 1):
+                    print(f"  {i:>2}. [{c['status']}] {c['collection']} / "
+                          f"{c['title']}  ({c['mb']} MB)  ← {c['pdf']}")
+                fresh = sum(1 for c in candidates if c["status"] == "新")
+                print(f"\n[batch] {len(candidates)} PDF in sources, {fresh} 新 — "
+                      f"pull with --pull all (只拉新书) or --pull N[=标题]")
+            if not args.pull:
+                return 0
+        pulled = parse_pull(args.pull, candidates)
+        for item in pulled:
+            dest = inbox / item["collection"] / f"{item['title']}.pdf"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                print(f"  = already in inbox: {dest.name}")
+                continue
+            shutil.copy2(item["pdf"], dest)
+            print(f"  ⬇ {item['collection']} / {item['title']}.pdf")
+        print(f"\n[batch] {len(pulled)} 本已入收件箱 — next: plan "
+              f"(no flags) then --go")
+        return 0
 
     proj = pick_project(args.project, inbox)
     root = Path(proj["path"])
