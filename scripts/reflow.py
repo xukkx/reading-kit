@@ -12,7 +12,11 @@ Transformations:
 
 Usage:
   python reflow.py --slug yuedu-heji --first 10 --last 32 \
-      --title 比较文学论（梵·第根） --page-offset 40 --out "vault/Books/比较文学论"
+      --title 比较文学论（梵·第根） --page-offset 40 --out "vault/Books/比较文学/比较文学论"
+
+--out should be vault/Books/<Collection>/<书名> — the Collection folder is what
+partitions the RAG index (see rag.py), so pick the same collection name already
+used under 10-Notes/ and 20-Literature/ for this topic.
 """
 import argparse, re, sys
 from pathlib import Path

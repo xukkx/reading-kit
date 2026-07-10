@@ -3,7 +3,7 @@
  * Backend: scripts/rag.py serve  (POST {q, provider?, k?} -> {answer, sources}) */
 'use strict';
 
-const { Plugin, ItemView, PluginSettingTab, Setting, requestUrl, Notice, MarkdownRenderer, Modal, FuzzySuggestModal, MarkdownView, Menu, Platform } = require('obsidian');
+const { Plugin, ItemView, PluginSettingTab, Setting, requestUrl, Notice, MarkdownRenderer, Modal, FuzzySuggestModal, MarkdownView, Menu, Platform, TFolder } = require('obsidian');
 
 /* 跳转页码: fuzzy picker over all page markers in the active note */
 class PageJumpModal extends FuzzySuggestModal {
@@ -114,10 +114,11 @@ class RagView extends ItemView {
     const s = this.plugin.settings;
     this.log.createDiv({ cls: 'vrag-q', text: q });
     const a = this.log.createDiv({ cls: 'vrag-a' });
-    a.setText('检索中…');
+    const collection = this.plugin.resolveCollection(this.plugin.getReadingFile());
+    a.setText(`检索中…（${collection}）`);
     this.log.scrollTo({ top: this.log.scrollHeight });
     try {
-      const body = { q, k: s.topK };
+      const body = { q, k: s.topK, collection };
       if (s.provider) body.provider = s.provider;
       const base = await this.plugin.resolveEndpoint();
       const r = await requestUrl({
@@ -185,7 +186,9 @@ class RagSettingTab extends PluginSettingTab {
         try {
           const ep = await this.plugin.resolveEndpoint(true);
           const r = await requestUrl({ url: ep + '/health', method: 'GET' });
-          new Notice(`✅ 已连接 ${ep} — 知识库 ${r.json.chunks} 条`);
+          const byCol = r.json.collections
+            ? '（' + Object.entries(r.json.collections).map(([c, n]) => `${c} ${n}`).join('、') + '）' : '';
+          new Notice(`✅ 已连接 ${ep} — 知识库共 ${r.json.chunks} 条 ${byCol}`);
         } catch (e) { new Notice('⚠️ ' + e.message, 10000); }
         b.setButtonText('测试');
       }));
@@ -223,8 +226,10 @@ module.exports = class RagPlugin extends Plugin {
       menu.addItem(i => i.setTitle('🔢 跳转页码').setIcon('hash')
         .onClick(() => this.jumpToPage()));
       menu.addSeparator();
-      menu.addItem(i => i.setTitle('🔄 重建知识库索引（批注入库后跑一次）').setIcon('refresh-cw')
-        .onClick(() => this.app.commands.executeCommandById('vault-rag:rebuild-index')));
+      menu.addItem(i => i.setTitle('🔄 重建当前收藏索引（批注入库后跑一次）').setIcon('refresh-cw')
+        .onClick(() => this.rebuildIndex(this.resolveCollection(this.getReadingFile()))));
+      menu.addItem(i => i.setTitle('🔄 重建全部收藏索引（较慢，多收藏时才需要）').setIcon('refresh-cw')
+        .onClick(() => this.rebuildIndex('*')));
       menu.addItem(i => i.setTitle('📘 使用说明').setIcon('help-circle')
         .onClick(() => this.app.workspace.openLinkText('使用说明', '', false)));
       menu.showAtMouseEvent(evt);
@@ -263,19 +268,13 @@ module.exports = class RagPlugin extends Plugin {
     });
     this.addCommand({
       id: 'rebuild-index',
-      name: '重建知识库索引（把新批注/笔记纳入问答）',
-      callback: async () => {
-        new Notice('重建索引中…');
-        try {
-          const base = await this.resolveEndpoint();
-          const r = await requestUrl({
-            url: base, method: 'POST',
-            contentType: 'application/json', body: JSON.stringify({ cmd: 'rebuild' }), throw: false,
-          });
-          if (r.status !== 200) { this._goodEp = null; throw new Error((r.json && r.json.error) || 'HTTP ' + r.status); }
-          new Notice(`✅ 索引已更新：${r.json.chunks} 条`);
-        } catch (e) { new Notice('⚠️ ' + e.message, 8000); }
-      },
+      name: '重建知识库索引：当前收藏（把新批注/笔记纳入问答）',
+      callback: () => this.rebuildIndex(this.resolveCollection(this.getReadingFile())),
+    });
+    this.addCommand({
+      id: 'rebuild-index-all',
+      name: '重建知识库索引：全部收藏（较慢，多收藏时才需要）',
+      callback: () => this.rebuildIndex('*'),
     });
 
     // right-click menu on selection (editing mode)
@@ -394,10 +393,10 @@ module.exports = class RagPlugin extends Plugin {
     }
   }
 
-  async jumpToPage() {
+  /* The reading view, robust to focus being on a ribbon/sidebar/panel instead
+     of the book pane — falls back to the most recently active markdown leaf. */
+  getReadingView() {
     const { workspace } = this.app;
-    // Ribbon clicks steal focus to the sidebar — the "active view" may not be
-    // the book pane. Fall back to the most recent markdown leaf in the main area.
     let view = workspace.getActiveViewOfType(MarkdownView);
     if (!view) {
       const leaf = workspace.getMostRecentLeaf(workspace.rootSplit);
@@ -407,6 +406,48 @@ module.exports = class RagPlugin extends Plugin {
       const md = workspace.getLeavesOfType('markdown');
       if (md.length) view = md[0].view;
     }
+    return view;
+  }
+
+  getReadingFile() {
+    const view = this.getReadingView();
+    return view && view.file;
+  }
+
+  /* Collection = a Books/<name>/ that itself contains subfolders (real collection,
+     e.g. Books/比较文学/比较文学论/) as opposed to holding files directly (that's
+     just a book). Mirrors rag.py's discover_collections()/file_collection() exactly
+     -- must agree with the server on what's a real collection, or we'd ask for a
+     collection index that was never built (e.g. a same-named folder under
+     10-Notes/20-Literature that exists for unrelated reasons, like a full-text split). */
+  resolveCollection(file) {
+    if (!file) return 'default';
+    const parts = file.path.split('/');
+    if (parts.length < 2 || !['Books', '10-Notes', '20-Literature'].includes(parts[0])) return 'default';
+    const candidate = parts[1];
+    const booksSub = this.app.vault.getAbstractFileByPath(`Books/${candidate}`);
+    const isRealCollection = booksSub instanceof TFolder &&
+      booksSub.children.some(c => c instanceof TFolder);
+    return isRealCollection ? candidate : 'default';
+  }
+
+  async rebuildIndex(collection) {
+    new Notice(collection === '*' ? '重建全部收藏索引中…' : `重建「${collection}」收藏索引中…`);
+    try {
+      const base = await this.resolveEndpoint();
+      const r = await requestUrl({
+        url: base, method: 'POST',
+        contentType: 'application/json', body: JSON.stringify({ cmd: 'rebuild', collection }), throw: false,
+      });
+      if (r.status !== 200) { this._goodEp = null; throw new Error((r.json && r.json.error) || 'HTTP ' + r.status); }
+      const byCol = r.json.collections
+        ? '（' + Object.entries(r.json.collections).map(([c, n]) => `${c} ${n}`).join('、') + '）' : '';
+      new Notice(`✅ 索引已更新：共 ${r.json.chunks} 条 ${byCol}`);
+    } catch (e) { new Notice('⚠️ ' + e.message, 8000); }
+  }
+
+  async jumpToPage() {
+    const view = this.getReadingView();
     const file = view && view.file;
     if (!file) { new Notice('先打开一本书（Books 文件夹里的正文）'); return; }
     const text = await this.app.vault.cachedRead(file);

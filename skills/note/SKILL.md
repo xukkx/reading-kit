@@ -11,7 +11,7 @@ The Obsidian vault is the `vault/` folder at this project's root.
 
 1. **Understand the input.** Split multiple distinct ideas — one idea per note (Zettelkasten).
 2. **Find link candidates first.** Glob `vault/**/*.md` for related filenames; Grep bodies and `aliases:` for the topic's keywords (search the user's languages). Every new note should link to at least one existing note when anything related exists.
-3. **Write each note** to `vault/10-Notes/<Title>.md` (`00-Inbox/` for rough captures):
+3. **Write each note** to `vault/10-Notes/<TopicFolder>/<Title>.md` (`00-Inbox/` for rough captures). `<TopicFolder>` matches the MOC/topic this note belongs to and is also the RAG index partition (`reading-system` skill) — reuse an existing one from step 2's related notes; only start a new topic folder for a genuinely new subject:
    - Title = a claim or concept phrase. Filename = title; avoid `\ / : * ? " < > | [ ] # ^`.
    - Frontmatter: `created` (today), `tags` (2–4, lowercase-kebab, reuse existing — grep `tags:` first), `aliases` (synonyms/translations).
    - Body: restate the idea clearly, weave `[[wikilinks]]` inline, "Related" section with reasons, "Source" section.
@@ -22,4 +22,4 @@ The Obsidian vault is the `vault/` folder at this project's root.
 
 - Never overwrite an existing note with the same title — extend it or pick a more specific title.
 - Keep notes under ~300 words; longer means it's several notes.
-- Links are the organization; folders are just storage.
+- Links are the organization; folders are just storage — except the topic folder, which also scopes what the RAG index can retrieve together.

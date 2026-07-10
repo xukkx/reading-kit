@@ -1,14 +1,53 @@
 # setup.ps1 — Reading Kit 一键安装
-# 用法：git clone 后，在 reading-kit 目录里运行  pwsh -File setup.ps1 [-Target <安装目录>]
-param([string]$Target = (Join-Path (Split-Path $PSScriptRoot -Parent) "my-reading"))
+# 用法：git clone 后，在 reading-kit 目录里运行  pwsh -File setup.ps1 [-Target <安装目录>] [-Slug <项目简称>]
+param(
+    [string]$Target = (Join-Path (Split-Path $PSScriptRoot -Parent) "my-reading"),
+    [string]$Slug
+)
 
 $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
 Write-Host "`n📖 Reading Kit 安装向导" -ForegroundColor Cyan
 Write-Host "   安装到：$Target`n"
 
+# ---------- 0. 项目身份（多项目不冲突：全局注册表） ----------
+# 每台机器上可能装多个 reading-kit 项目。每个项目需要两个全局唯一的东西：
+# 坚果云远程目录名、rag.py serve 端口。这里自动分配并记入 ~\.reading-kit\registry.json——
+# 不需要用户去挑名字/记名字，也不依赖任何人手工保证不撞车。
+Write-Host "0️⃣  项目身份（多项目防撞车）…"
+$registryDir = "$HOME\.reading-kit"
+$registryPath = "$registryDir\registry.json"
+New-Item -ItemType Directory -Force $registryDir | Out-Null
+$registry = if (Test-Path $registryPath) { Get-Content $registryPath -Raw | ConvertFrom-Json } else { [PSCustomObject]@{ projects = @() } }
+$projects = @($registry.projects)
+$targetAbs = [System.IO.Path]::GetFullPath($Target)
+
+$existing = $projects | Where-Object { $_.path -eq $targetAbs }
+if ($existing) {
+    $projSlug = $existing.slug
+    $remoteDir = $existing.remoteBaseDir
+    $ragPort = $existing.ragPort
+    Write-Host "   ℹ️ 项目已注册：slug=$projSlug，远程目录=$remoteDir，端口=$ragPort"
+} else {
+    if (-not $Slug) {
+        $Slug = (Split-Path $targetAbs -Leaf) -replace '[^a-zA-Z0-9]+', '-'
+        $Slug = $Slug.ToLower().Trim('-')
+        if (-not $Slug) { $Slug = "project" }
+    }
+    $projSlug = $Slug
+    $n = 1
+    while ($projects | Where-Object { $_.slug -eq $projSlug }) { $n++; $projSlug = "$Slug-$n" }
+    $remoteDir = "obsidian-$projSlug"
+    $usedPorts = @($projects | ForEach-Object { $_.ragPort })
+    $ragPort = 8766
+    while ($usedPorts -contains $ragPort) { $ragPort++ }
+    $projects += [PSCustomObject]@{ slug = $projSlug; path = $targetAbs; remoteBaseDir = $remoteDir; ragPort = $ragPort }
+    ([PSCustomObject]@{ projects = $projects }) | ConvertTo-Json -Depth 5 | Set-Content $registryPath
+    Write-Host "   ✅ 新项目已注册：slug=$projSlug，远程目录=$remoteDir，端口=$ragPort（登记于 $registryPath）"
+}
+
 # ---------- 1. 依赖检查 ----------
-Write-Host "1️⃣  检查依赖…"
+Write-Host "`n1️⃣  检查依赖…"
 $py = Get-Command python -ErrorAction SilentlyContinue
 if (-not $py) { Write-Host "❌ 需要 Python 3.10+：https://www.python.org/downloads/（安装时勾选 Add to PATH）" -ForegroundColor Red; exit 1 }
 Write-Host "   ✅ python $(python --version 2>&1)"
@@ -58,10 +97,40 @@ Copy-Item "$kit\scripts"  "$Target\" -Recurse -Force
 New-Item -ItemType Directory -Force "$Target\staging" | Out-Null
 if (-not (Test-Path "$Target\vault")) {
     Copy-Item "$kit\templates\vault" "$Target\vault" -Recurse
-    Write-Host "   ✅ vault 已创建（含阅读排版、插件配置）"
+    foreach ($f in @('同步设置.md', '使用说明.md', '系统架构.md', '90-Attachments\系统架构图.svg')) {
+        $p = "$Target\vault\$f"
+        if (Test-Path $p) {
+            (Get-Content $p -Raw) `
+                -replace '\{\{REMOTE_DIR\}\}', $remoteDir `
+                -replace '\{\{RAG_PORT\}\}', $ragPort `
+                -replace '\{\{SLUG\}\}', $projSlug `
+                | Set-Content $p
+        }
+    }
+    Write-Host "   ✅ vault 已创建（含阅读排版、插件配置，已填入本项目专属的同步目录/端口）"
 } else { Write-Host "   ℹ️ vault 已存在，未覆盖" }
 Copy-Item "$kit\plugin\vault-rag" "$Target\vault\.obsidian\plugins\vault-rag" -Recurse -Force
 Write-Host "   ✅ 插件 vault-rag 已装入 vault"
+
+# ---------- 3b. 局域网 IP（供插件预填 + 手机连接） ----------
+# 排除 VPN/虚拟网卡，优先选真正能被手机连到的家庭 Wi-Fi/有线网段
+$lanIP = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and
+        $_.InterfaceAlias -notmatch 'NordLynx|WireGuard|TAP|TUN|Loopback|vEthernet|Virtual|VPN'
+    } |
+    Sort-Object { if ($_.IPAddress -like '192.168.*') { 0 } elseif ($_.IPAddress -like '10.*') { 1 } else { 2 } } |
+    Select-Object -First 1).IPAddress
+
+# 预填插件设置：省去手动到 Obsidian 设置里粘贴 RAG 服务地址这一步
+$pluginDataPath = "$Target\vault\.obsidian\plugins\vault-rag\data.json"
+if (-not (Test-Path $pluginDataPath)) {
+    $endpoint = "http://localhost:$ragPort"
+    if ($lanIP) { $endpoint += ", http://${lanIP}:$ragPort" }
+    (@{ endpoint = $endpoint; provider = ''; topK = 6 } | ConvertTo-Json) | Set-Content $pluginDataPath
+    Write-Host "   ✅ 已预填插件的 RAG 服务地址：$endpoint（Obsidian 设置里可再改）"
+}
+
 New-Item -ItemType Directory -Force "$Target\.claude\skills" | Out-Null
 Copy-Item "$kit\skills\*" "$Target\.claude\skills\" -Recurse -Force
 foreach ($t in 'CLAUDE.md','AGENTS.md') { if (-not (Test-Path "$Target\$t")) { Copy-Item "$kit\templates\$t" "$Target\" } }
@@ -70,27 +139,31 @@ if (-not (Test-Path "$Target\.rag\providers.json")) { Copy-Item "$kit\templates\
 Write-Host "   ✅ Claude 技能 / 配置模板已就位"
 
 # ---------- 4. 局域网（手机访问用） ----------
-$lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).IPAddress
+$fwRuleName = "Reading Kit RAG - $projSlug"
 try {
-    if (-not (Get-NetFirewallRule -DisplayName 'Reading Kit RAG' -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -DisplayName 'Reading Kit RAG' -Direction Inbound -LocalPort 8766 -Protocol TCP -Action Allow -ErrorAction Stop | Out-Null
-        Write-Host "`n4️⃣  防火墙：已放行 8766 端口（手机访问 AI 问答用）"
-    } else { Write-Host "`n4️⃣  防火墙规则已存在" }
+    if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -LocalPort $ragPort -Protocol TCP -Action Allow -ErrorAction Stop | Out-Null
+        Write-Host "`n4️⃣  防火墙：已放行 $ragPort 端口（手机访问 AI 问答用）"
+    } else { Write-Host "`n4️⃣  防火墙规则已存在（$fwRuleName）" }
 } catch {
     Write-Host "`n4️⃣  ⚠️ 无法自动放行端口（需管理员）。手机连不上 AI 时，用管理员 PowerShell 运行：" -ForegroundColor Yellow
-    Write-Host "   New-NetFirewallRule -DisplayName 'Reading Kit RAG' -Direction Inbound -LocalPort 8766 -Protocol TCP -Action Allow"
+    Write-Host "   New-NetFirewallRule -DisplayName '$fwRuleName' -Direction Inbound -LocalPort $ragPort -Protocol TCP -Action Allow"
 }
 if ($lanIP) {
-    Write-Host "   📱 本机局域网地址：http://${lanIP}:8766"
-    Write-Host "   → Obsidian 插件设置「RAG 服务地址」填：http://localhost:8766, http://${lanIP}:8766"
-    Write-Host "     （两个都填，设置随 vault 同步后手机电脑通用）"
+    Write-Host "   📱 本机局域网地址：http://${lanIP}:$ragPort"
+} else {
+    Write-Host "   ⚠️ 未能自动探测到局域网 IP（可能只有 VPN 网卡在线）——手机连不上时手动跑 ipconfig 找真实 Wi-Fi 的 IPv4 地址" -ForegroundColor Yellow
 }
 
 # ---------- 5. 下一步 ----------
-Write-Host "`n🎉 安装完成！接下来：" -ForegroundColor Green
+Write-Host "`n🎉 安装完成！本项目身份：slug=$projSlug ｜ 坚果云远程目录=$remoteDir ｜ RAG 端口=$ragPort" -ForegroundColor Green
+Write-Host "   这三个值已自动写进 vault 里的说明文档和插件设置，不用手填。"
+Write-Host "   多项目查冲突随时跑：pwsh -File `"$Target\scripts\check_sync.ps1`"`n"
+Write-Host "接下来：" -ForegroundColor Green
 Write-Host "   1. Obsidian → Open folder as vault → $Target\vault"
 Write-Host "      （Settings → Community plugins → 关闭 Restricted mode → 启用 Vault RAG）"
-Write-Host "   2. 问答服务：cd $Target ; python scripts\rag.py serve"
+Write-Host "   2. 问答服务：cd $Target ; python scripts\rag.py serve --port $ragPort"
 Write-Host "   3. 导入第一本书：把 PDF 给 Claude Code，说 /read-book <路径>"
 Write-Host "      （或手动跑 CLAUDE.md 里的四条流水线命令）"
-Write-Host "   4. 打开 vault 里的 [[使用说明]] — 日常操作全在里面`n"
+Write-Host "   4. 打开 vault 里的 [[使用说明]] — 日常操作全在里面"
+Write-Host "   5. 想同步到手机：vault 里的 [[同步设置]] —— 远程目录名已经帮你填好了`n"

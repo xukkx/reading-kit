@@ -7,6 +7,10 @@ description: Import a PDF/book into the Obsidian vault — OCR with verification
 
 The Obsidian vault is the `vault/` folder at this project's root. All pipeline scripts are in `scripts/`.
 
+## Phase 0 — Pick the topic folder
+
+A topic folder is a name shared one level under `Books/`, `10-Notes/`, and `20-Literature/` (e.g. `比较文学`) — it's also the RAG index partition (`rag.py build/ask --collection <name>`; see `reading-system`), so retrieval for this book won't mix with unrelated topics. Check existing subfolders under `vault/10-Notes/` first; reuse one if the book fits, otherwise ask the user for a short new name before filing anything.
+
 ## Phase A — Ingest (scanned PDFs)
 
 1. Copy the PDF into `vault/90-Attachments/` (sanitize the filename for Windows).
@@ -22,18 +26,18 @@ The Obsidian vault is the `vault/` folder at this project's root. All pipeline s
 ## Phase B — Build the reading edition
 
 ```
-python scripts\reflow.py --slug <slug> --first <a> --last <b> --title <书名> --page-offset <offset> --out "vault/Books/<书名>"
+python scripts\reflow.py --slug <slug> --first <a> --last <b> --title <书名> --page-offset <offset> --out "vault/Books/<TopicFolder>/<书名>"
 ```
-(offset: book page = pdf page + offset.) This merges cross-page paragraphs, strips page numbers, converts section titles to headings, keeps `==highlights==`, and embeds visible/jumpable page markers. Then `python scripts\rag.py build` so the book is retrievable.
+(offset: book page = pdf page + offset.) This merges cross-page paragraphs, strips page numbers, converts section titles to headings, keeps `==highlights==`, and embeds visible/jumpable page markers. Then `python scripts\rag.py build --collection <TopicFolder>` so the book is retrievable (scoped rebuild — doesn't touch other topics' indices).
 
-For multi-article collections: detect article boundaries from transcript openings, build one Books/ entry per article, and maintain a collection literature note with a per-article table + progress line.
+For multi-article PDFs: detect article boundaries from transcript openings, build one Books/<TopicFolder>/ entry per article, and maintain a collection literature note with a per-article table + progress line.
 
 ## Phase C — Read, annotate, extract
 
-1. Create a literature note in `vault/20-Literature/` (use `vault/_templates/literature.md`): frontmatter (author/year/source/status), summary.
+1. Create a literature note in `vault/20-Literature/<TopicFolder>/` (use `vault/_templates/literature.md`): frontmatter (author/year/source/status), summary.
 2. Annotate what matters — reader `==highlights==` in the source are prime annotation targets:
    `> "exact quote" (p.N)` + `💭 comment` (in the user's language). Link concepts to existing notes inline.
-3. Extract the 3–6 strongest ideas into atomic notes in `vault/10-Notes/` (one idea per note, wikilinks, tags); list them under the literature note's "Extracted ideas"; make each reachable from a MOC in `vault/30-MOCs/`.
+3. Extract the 3–6 strongest ideas into atomic notes in `vault/10-Notes/<TopicFolder>/` (same topic folder as Phase 0; one idea per note, wikilinks, tags); list them under the literature note's "Extracted ideas"; make each reachable from a MOC in `vault/30-MOCs/`.
 4. Update the Reading MOC and record progress (page to resume from) in the literature note.
 5. Work chapter-by-chapter on long books; check in with the user between chapters.
 
@@ -42,3 +46,4 @@ For multi-article collections: detect article boundaries from transcript opening
 - Always cite page numbers with quotes.
 - Resuming: read the literature note's Progress line and continue from there.
 - Summarizing every page is not the goal — judgment about what matters is.
+- Two books sharing the exact same filename (e.g. both using `正文.md`) is fine — Obsidian disambiguates by folder — but any note you write that links to one must use the path-qualified `[[Books/<TopicFolder>/<书名>/正文]]` form, not the bare filename.

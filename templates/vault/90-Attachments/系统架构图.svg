@@ -46,7 +46,7 @@
   <text class="t" x="395" y="399" text-anchor="middle">Obsidian 电脑端</text>
   <rect class="node" x="315" y="448" width="160" height="60" stroke="#3d6b54"/>
   <text class="t" x="395" y="472" text-anchor="middle">🧠 rag.py serve</text>
-  <text class="s" x="395" y="491" text-anchor="middle">AI 问答 :8766（本地嵌入）</text>
+  <text class="s" x="395" y="491" text-anchor="middle">AI 问答 :{{RAG_PORT}}（本地嵌入）</text>
 
   <line class="edge" x1="395" y1="166" x2="395" y2="196"/>
   <line class="edge" x1="395" y1="252" x2="395" y2="282"/>

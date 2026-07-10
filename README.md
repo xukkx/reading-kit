@@ -34,7 +34,7 @@ pwsh -File setup.ps1          # 或 powershell -File setup.ps1
 
 1. **导入书**：装了 [Claude Code](https://claude.com/claude-code) 的话直接说 `/read-book D:\书.pdf`——OCR、校验、排版、笔记一条龙；没装就手动跑 `CLAUDE.md` 里的 4 条命令
 2. **读**：Obsidian 打开 `vault` → `Books/` → 正文。大纲=目录；📖 图标菜单=全部功能（跳页码等）
-3. **批注 / 问AI**：选中文字，弹出小工具条 → ✍️ 或 ❓（问答需电脑跑着 `python scripts\rag.py serve`。不想手动跑：把 `templates/rag/start_rag_server.vbs` 复制到项目根目录、改好路径，在插件设置「自动启动命令」里填 `wscript.exe "…\start_rag_server.vbs"`，连接失败时插件会自己拉起服务；再把这个 vbs 复制进 `shell:startup` 就随开机常驻）
+3. **批注 / 问AI**：选中文字，弹出小工具条 → ✍️ 或 ❓（问答需电脑跑着 `python scripts\rag.py serve`）
 4. **多设备**：vault 是纯文件夹——用 [remotely-save](https://github.com/remotely-save/remotely-save) 插件 + 坚果云(WebDAV)/S3 同步；插件和使用说明会跟着 vault 一起同步到每台设备
 5. **忘了怎么用**：vault 里的 [[使用说明]]
 
@@ -43,7 +43,6 @@ pwsh -File setup.ps1          # 或 powershell -File setup.ps1
 ```
 plugin/vault-rag/   Obsidian 插件：问答面板、划线批注、跳页码、选中弹条（手机可用）
 scripts/            流水线：paddle_ocr(整本OCR) → ingest(共识校验+台账) → reflow(重排) → rag(问答)
-                    postprocess_ocr(人文类OCR去伪LaTeX：脚注标记 $ ^{①} $ → ①，着重号/下划线还原)
 skills/             Claude Code 技能：read-book / note / organize-vault
 templates/          vault 模板（含阅读排版CSS、使用说明）、CLAUDE.md、providers.json
 setup.ps1           一键安装
