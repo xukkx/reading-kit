@@ -157,6 +157,12 @@ still pointing at `localhost` → ⚠️ in the panel.
 
 ## Stage 6 — 批量扩库
 
+Many books at once: drop PDFs into the hub's `Inbox\<合集>\书名.pdf` (folder =
+collection, filename = title) and sweep the lot —
+`python scripts\import_batch.py <hub>\Inbox --go` submits every book to the
+console's serial queue, skips what's already on the shelf, and archives
+originals to `Inbox\_done\` as they're handed off (合订本 excluded — those need
+`--first/--last` individually; see the `library` skill for routing details).
 Adding book #20 does not re-process books #1–19: RAG builds are incremental
 (per-file cache), each collection is an independent index partition, and the
 console queue is serial — so the user can queue an evening's worth of PDFs and

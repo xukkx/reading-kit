@@ -38,6 +38,25 @@ python scripts\import_book.py --pdf D:\书.pdf --title 书名 --collection 分�
 - **质量门失败（退出码 2）= 升级信号**：说明扫描质量或版式超出了共识校验的能力，这本书转入学术精校工作流处理。
 - 反向不成立：学术精校不走质量门，从头到尾人在环内。
 
+## 批量导入（import_batch.py）
+
+几十上百本书不必逐本填表：**文件夹就是元数据**。把 PDF 按合集丢进收件箱——
+
+```
+Inbox\女性文学\书名A.pdf     ← 子文件夹名 = 合集，文件名 = 书名
+Inbox\比较文学\书名B.pdf
+```
+
+```powershell
+python scripts\import_batch.py D:\AI_Projects\Reading_Hub\Inbox        # 只看计划
+python scripts\import_batch.py D:\AI_Projects\Reading_Hub\Inbox --go   # 全部提交进控制台串行队列
+```
+
+- 已在架的书自动跳过（`--force` 重导）；控制台对排队中的重复 slug 返回 409——重跑安全。
+- `--go` 把 PDF 复制进项目 `Input\`、逐本提交任务，原件移入 `Inbox\_done\`：**收件箱清空即进度条**。批量报告写入 `Inbox\_reports\`。
+- 目标项目：`--project`，或收件箱旁 `hub.json` 的 `defaultProject`。控制台没开：先启动，或 `--go --run` 就地串行执行。
+- **合订本不能批量**——单独用 `--first/--last` 拆书导入。
+
 ## 网页控制台（import_server.py）
 
 「快速阅读」导入的本地网页界面，浏览器里填表提交、看队列：

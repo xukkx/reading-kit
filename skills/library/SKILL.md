@@ -56,10 +56,28 @@ server / import console are actually up (live port probe).
 Lead with attention items, not raw listings: pending 精校 pages, exit-2
 escalations, and servers that are down are what the reader needs to act on.
 
-## 2. Import routing — "把这本书导入"
+## 2. Import routing — "把这本书导入 / 把 Inbox 清了"
 
-The user gives a PDF (often dropped into the hub's `Inbox\`). Do NOT make them
-choose a directory — route it:
+**Many PDFs (the normal case): batch the whole Inbox.** The folder IS the
+metadata — `Inbox\<合集>\书名.pdf`; loose PDFs fall to `--collection`
+(default 未分类). Then:
+
+```powershell
+python -X utf8 <kit>\scripts\import_batch.py <hub>\Inbox          # plan (always show this first)
+python -X utf8 <kit>\scripts\import_batch.py <hub>\Inbox --go     # submit all to the console queue
+```
+
+`--go` copies each PDF to the project's `Input\`, submits serial jobs via the
+console API, and moves originals to `Inbox\_done\` — the emptying Inbox is the
+progress bar. Books already on the shelf are skipped automatically; the
+console 409s duplicate queued slugs, so re-running is safe. Target project:
+`--project`, else `hub.json`'s `defaultProject`. Console down → start it
+detached first, or `--go --run` executes serially without it. Batch report
+lands in `Inbox\_reports\`. **合订本 (multi-book PDFs) cannot be batched** —
+set them aside for individual `--first/--last` imports. After the queue
+drains, re-run inventory and walk the user through any gate failures.
+
+**A single PDF by hand** — route it the same way, or directly:
 
 1. Decide **target project + collection**. Infer from the book's subject vs.
    existing collections; if genuinely ambiguous, ask ONE question offering the
