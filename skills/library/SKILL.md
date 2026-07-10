@@ -41,10 +41,12 @@ server / import console are actually up (live port probe).
 
 1. **Artifact tool available** (claude.ai/code, desktop): write the HTML to a
    STABLE path — `<hub>\dashboard\library.html` (create `dashboard\` if
-   missing; same path every time so the artifact URL stays stable) — then
-   publish with `Artifact(file_path=..., favicon="📚")`. Keep favicon 📚
-   forever. Also give a 2-3 sentence chat summary: totals + anything needing
-   attention (pending adjudications, failed gates, down servers).
+   missing) — then publish with `Artifact(file_path=..., favicon="📚")`. Keep
+   favicon 📚 forever. **Same URL across sessions**: if
+   `<hub>\dashboard\artifact-url.txt` exists, pass its content as `url` so the
+   existing artifact updates in place; after a first publish, save the returned
+   URL into that file. Also give a 2-3 sentence chat summary: totals + anything
+   needing attention (pending adjudications, failed gates, down servers).
 2. **No Artifact but SendUserFile exists**: send the HTML with
    `display: "render"`.
 3. **Plain CLI chat**: print the `--markdown` output directly — it is designed
