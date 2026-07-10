@@ -51,3 +51,6 @@ python scripts\import_server.py --port 8888 --root D:\某个部署
 - 任务**严格串行**排队执行（控制云端 OCR 花费与限速）；每个任务卡片上有实时日志和质量门报告（校验比、逐页失败原因表），门失败的书按上面的升级策略提示转入学术精校。
 - 任务状态与日志落盘在 `staging\_jobs\<id>\`（job.json + job.log），服务重启后历史仍在。
 - 它只是 `import_book.py` 的薄封装，不含任何新的管线逻辑：**CLI 始终可独立使用**。
+- **人工精校**（v1.5）：控制台第三区按 slug 汇总待精校页（有转录但无 verified 文件的页，按台账状态分组：待裁决 / 已升级 / 出错 / 无台账）。点「开始精校」进入逐页视图：左边扫描图、右边模型 A/B 转录，选 A、选 B 或手写最终文本（快捷键 A / B / Ctrl+Enter 保存 / → 跳过），有分歧的页可看 diff。
+- 保存即写 `staging/<slug>/verified/pg-XXXX.md` 并向 `staging/ledger.jsonl` 追加一条 status=verified、note=`human adjudicated: <action>` 的台账行（沿用该页原行的 similarity/containment）——质量门与 reflow.py 从此把该页当作已核验，下游脚本零改动。
+- 建议流程：精校完成后重跑「仅质检（gate-only）」确认达标，再走正式导入的后续步骤（重跑 import 会自动跳过已完成的 OCR/共识阶段）。误存的页删掉对应 verified/ 文件即可回退（v1.5 不提供界面撤销）。

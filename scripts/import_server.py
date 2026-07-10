@@ -11,6 +11,14 @@ Per this repo's convention the script never imports its siblings: import_book.py
 is driven via subprocess and all state passes through the filesystem
 (staging/_jobs/<job_id>/job.json + job.log).
 
+v1.5 adds a human adjudication screen (人工精校): review staging pages that
+have transcripts but no verified file (adjudicate/escalated/error), compare
+the page image against the model A/B transcripts, pick one or write a final
+text. Saving writes staging/<slug>/verified/pg-XXXX.md and appends a
+status=verified line to staging/ledger.jsonl in ingest.py's field shape, so
+the quality gate (import_book.py) and reflow.py count the page as verified
+with zero changes downstream.
+
 Default port: this ROOT's ragPort in ~/.reading-kit/registry.json + 100
 (complit 8866 / zhangxianyi 8867); unregistered roots fall back to 8830.
 
@@ -26,10 +34,10 @@ import subprocess
 import sys
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -116,6 +124,227 @@ def parse_gate(text):
     if m:
         gate["vault_note"] = m.group(1).strip()
     return gate or None
+
+
+# ---------- human adjudication (人工精校, v1.5) ----------
+#
+# A page is "pending" when staging/<slug>/transcripts/ has an A and/or B
+# transcript for it but staging/<slug>/verified/<page>.md does not exist.
+# Saving an adjudication writes the verified file and appends a ledger line in
+# ingest.py's field shape, which is exactly what the downstream quality gate
+# (import_book.py) and reflow.py consume.
+
+ADJ_LOCK = threading.Lock()
+LABEL_RE = re.compile(r"[\w\-]+$")   # pg-0042, img-0001-foo; no dots/slashes
+
+
+def utc_iso():
+    """Same ledger timestamp shape as ingest.py's now()."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def is_within(path, base):
+    """True if resolved `path` equals or lies inside resolved `base`."""
+    s, b = str(path), str(base)
+    return s == b or s.startswith(b.rstrip("\\/") + os.sep)
+
+
+def ledger_by_pages_dir(staging):
+    """Parse staging/ledger.jsonl once into {resolved pages-dir: {page label:
+    last-wins record}}. Slug attribution uses the image-parent-dir rule, the
+    same rule import_book.py's slug_ledger uses (kept as a duplicate, not an
+    import, per repo convention); lines without a usable image path (e.g.
+    free-form manual-correction lines) are skipped, as they are there."""
+    out = {}
+    ledger = staging / "ledger.jsonl"
+    if not ledger.exists():
+        return out
+    try:
+        lines = ledger.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    cache = {}  # dirname string -> resolved dir string ("" = unusable)
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        img, page = rec.get("image"), rec.get("page")
+        if not img or not page:
+            continue
+        d = os.path.dirname(str(img))
+        parent = cache.get(d)
+        if parent is None:
+            try:
+                parent = str(Path(d).resolve()) if d else ""
+            except OSError:
+                parent = ""
+            cache[d] = parent
+        if parent:
+            out.setdefault(parent, {})[page] = rec
+    return out
+
+
+def slug_records(staging, slug):
+    """Last-wins ledger records for one slug, keyed by page label."""
+    return ledger_by_pages_dir(staging).get(
+        str((staging / slug / "pages").resolve()), {})
+
+
+def pending_labels(staging, slug):
+    """Sorted page labels with at least one transcript but no verified file."""
+    tdir = staging / slug / "transcripts"
+    vdir = staging / slug / "verified"
+    labels = set()
+    if tdir.is_dir():
+        for f in tdir.iterdir():
+            if f.name.endswith((".a.md", ".b.md")):
+                labels.add(f.name[:-5])
+    return sorted(l for l in labels if not (vdir / f"{l}.md").exists())
+
+
+def find_page_image(staging, slug, label, rec):
+    """Image file for a page: the ledger record's path when it exists inside
+    staging, else the pages/ file with the matching page number (pdftoppm pads
+    filenames by the PDF's total page digits, so label pg-0010's file may be
+    pg-010.png), else any pages/ file whose stem equals the label."""
+    if rec and rec.get("image"):
+        try:
+            p = Path(rec["image"]).resolve()
+            if p.is_file() and is_within(p, staging.resolve()):
+                return p
+        except OSError:
+            pass
+    pages = staging / slug / "pages"
+    if not pages.is_dir():
+        return None
+    m = re.fullmatch(r"pg-0*(\d+)", label)
+    if m:
+        n = int(m.group(1))
+        for f in sorted(pages.glob("pg-*.png")):
+            m2 = re.fullmatch(r"pg-0*(\d+)", f.stem)
+            if m2 and int(m2.group(1)) == n:
+                return f.resolve()
+    for f in sorted(pages.iterdir()):
+        if f.is_file() and f.stem == label:
+            return f.resolve()
+    return None
+
+
+def staging_url(staging, path):
+    """/staging/... URL for an absolute path inside STAGING."""
+    rel = path.relative_to(staging.resolve()).as_posix()
+    return "/staging/" + quote(rel)
+
+
+def adj_summary(staging):
+    """GET /api/adjudicate: slugs with pages awaiting human review."""
+    out = []
+    if not staging.is_dir():
+        return out
+    ledger = ledger_by_pages_dir(staging)
+    for d in sorted(staging.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        pending = pending_labels(staging, d.name)
+        if not pending:
+            continue
+        recs = ledger.get(str((d / "pages").resolve()), {})
+        by = {}
+        for label in pending:
+            rec = recs.get(label)
+            st = rec.get("status", "missing") if rec else "missing"
+            by[st] = by.get(st, 0) + 1
+        out.append({"slug": d.name, "pending": len(pending), "by_status": by})
+    return out
+
+
+def adj_pages(staging, slug):
+    """GET /api/adjudicate/<slug>: ordered pending pages, or None -> 404."""
+    if not LABEL_RE.fullmatch(slug) or not (staging / slug).is_dir():
+        return None
+    recs = slug_records(staging, slug)
+    tdir = staging / slug / "transcripts"
+    pages = []
+    for label in pending_labels(staging, slug):
+        rec = recs.get(label)
+        img = find_page_image(staging, slug, label, rec)
+        a_f, b_f = tdir / f"{label}.a.md", tdir / f"{label}.b.md"
+        d_f = tdir / f"{label}.diff"
+        has_diff = d_f.exists()
+        pages.append({
+            "page": label,
+            "status": rec.get("status", "missing") if rec else "missing",
+            "similarity": rec.get("similarity") if rec else None,
+            "note_or_error": (rec.get("note") or rec.get("error")) if rec else None,
+            "has_diff": has_diff,
+            "image_url": staging_url(staging, img) if img else None,
+            "a_url": staging_url(staging, a_f.resolve()) if a_f.exists() else None,
+            "b_url": staging_url(staging, b_f.resolve()) if b_f.exists() else None,
+            "diff_url": staging_url(staging, d_f.resolve()) if has_diff else None,
+        })
+    return pages
+
+
+def adj_save(staging, slug, page, body):
+    """POST /api/adjudicate/<slug>/<page>: write verified/<page>.md + append a
+    verified ledger line (ingest.py field shape). Returns (json, http code)."""
+    if not LABEL_RE.fullmatch(slug) or not (staging / slug).is_dir():
+        return {"error": f"staging 里没有 slug '{slug}'"}, 404
+    if not LABEL_RE.fullmatch(page):
+        return {"error": "页码标签不合法"}, 400
+    action = body.get("action")
+    if action not in ("pick_a", "pick_b", "custom"):
+        return {"error": "action 必须是 pick_a / pick_b / custom"}, 400
+    text = body.get("text")
+    if text is not None and not isinstance(text, str):
+        return {"error": "text 必须是字符串"}, 400
+    if text is not None and not text.strip():
+        text = None                      # blank text = not provided
+    if action == "custom" and text is None:
+        return {"error": "custom 需要非空 text"}, 400
+    sdir = staging / slug
+    vfile = sdir / "verified" / f"{page}.md"
+    tdir = sdir / "transcripts"
+    with ADJ_LOCK:
+        if vfile.exists():
+            return {"error": f"{page} 已有 verified 文件，无需重复精校"}, 409
+        if text is not None:             # explicit text always wins
+            content = text
+        else:
+            src = tdir / f"{page}.{'a' if action == 'pick_a' else 'b'}.md"
+            if not src.exists():
+                return {"error": f"转录文件不存在：{src.name}"}, 400
+            content = src.read_text(encoding="utf-8")
+        prior = slug_records(staging, slug).get(page)
+        img = find_page_image(staging, slug, page, prior)
+        # Mirror ingest.py's record shape; carry provenance from the page's
+        # last ledger line when available. The image path is what attributes
+        # the line to this slug downstream, so keep the prior one verbatim.
+        rec = {"ts": utc_iso(),
+               "source": prior.get("source") if prior else None,
+               "page": page,
+               "image": (prior.get("image") if prior and prior.get("image")
+                         else str(img) if img
+                         else str(sdir / "pages" / f"{page}.png")),
+               "model_a": prior.get("model_a") if prior else None,
+               "model_b": prior.get("model_b") if prior else None}
+        for k in ("similarity", "containment"):
+            if prior and k in prior:
+                rec[k] = prior[k]
+        rec["status"] = "verified"
+        rec["note"] = f"human adjudicated: {action}"
+        vfile.parent.mkdir(parents=True, exist_ok=True)
+        vfile.write_text(content, encoding="utf-8")
+        with open(staging / "ledger.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        remaining = len(pending_labels(staging, slug))
+    return {"ok": True, "page": page, "remaining": remaining}, 200
 
 
 # ---------- job manager (one worker thread, strictly sequential) ----------
@@ -492,6 +721,31 @@ pre.log{margin:10px 0 0;background:#0d0f12;color:#c9d1d9;border:1px solid var(--
 .gate-esc th{color:var(--muted);font-weight:600}
 .guide{margin-top:8px;color:var(--warn);font-weight:600}
 .empty{color:var(--muted);font-size:13px;margin-top:12px}
+/* --- 人工精校 (adjudication) --- */
+.wrap.adj-open{max-width:1400px}
+.adj-row .job-title .dim{margin-left:8px}
+.adj-top{display:flex;align-items:center;gap:14px;margin-top:16px;flex-wrap:wrap}
+.adj-progress{font-size:14px}
+.adj-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin-top:12px}
+@media (max-width:900px){.adj-main{grid-template-columns:1fr}}
+.adj-left{position:sticky;top:10px;align-self:start;text-align:center}
+.adj-left img{max-width:100%;max-height:calc(100vh - 40px);object-fit:contain;
+  border:1px solid var(--line);border-radius:8px;background:#fff;cursor:zoom-in}
+.adj-pane{background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:10px 12px;margin-bottom:12px}
+.adj-pane.picked{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.adj-pane-head{display:flex;align-items:center;gap:10px;font-size:13px;
+  color:var(--muted);flex-wrap:wrap}
+.adj-pane-head b{color:var(--fg)}
+.adj-pane-head button{padding:2px 10px;font-size:12px}
+pre.adj-pre{margin:8px 0 0;background:var(--input-bg);border:1px solid var(--line);
+  border-radius:6px;padding:8px 10px;font:12px/1.7 Consolas,"Courier New",monospace;
+  max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+#adjEdit{width:100%;min-height:170px;margin-top:8px;background:var(--input-bg);
+  color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;
+  font:13px/1.7 Consolas,"Courier New",monospace;resize:vertical}
+.adj-actions{margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.adj-keys{color:var(--muted);font-size:12px;margin-top:6px}
 </style>
 </head>
 <body>
@@ -502,6 +756,8 @@ pre.log{margin:10px 0 0;background:#0d0f12;color:#c9d1d9;border:1px solid var(--
   <div class="meta">项目 <b id="proj">…</b> · <span id="rootLbl"></span>
     · <a id="ragLink" target="_blank" style="display:none"></a></div>
 </header>
+
+<div id="mainView">
 
 <section class="card">
   <h2>新书导入</h2>
@@ -548,6 +804,58 @@ pre.log{margin:10px 0 0;background:#0d0f12;color:#c9d1d9;border:1px solid var(--
   <div id="emptyHint" class="empty">暂无任务。任务严格串行执行（控制云端 OCR 花费与限速）。</div>
   <div id="jobs"></div>
 </section>
+
+<section>
+  <h2 style="margin-top:24px">人工精校</h2>
+  <div id="adjEmpty" class="empty">暂无待精校页面。质量门拦下的书（adjudicate / escalated / error 页）会出现在这里。</div>
+  <div id="adjList"></div>
+</section>
+
+</div><!-- /mainView -->
+
+<div id="adjView" style="display:none">
+  <div class="adj-top">
+    <button id="adjBack">← 返回</button>
+    <div class="adj-progress" id="adjProgress"></div>
+  </div>
+  <div id="adjBody">
+    <div class="adj-main">
+      <div class="adj-left">
+        <a id="adjImgLink" href="#" target="_blank" title="点击在新标签页查看原图"><img id="adjImg" alt="页面扫描图"></a>
+        <div id="adjNoImg" class="empty" style="display:none">（该页无扫描图）</div>
+      </div>
+      <div class="adj-right">
+        <div class="adj-pane" id="paneA">
+          <div class="adj-pane-head"><b>模型 A</b>
+            <button id="pickABtn">选此版（A）</button></div>
+          <pre class="adj-pre" id="adjTextA"></pre>
+        </div>
+        <div class="adj-pane" id="paneB">
+          <div class="adj-pane-head"><b>模型 B</b>
+            <button id="pickBBtn">选此版（B）</button></div>
+          <pre class="adj-pre" id="adjTextB"></pre>
+        </div>
+        <div class="adj-pane" id="paneDiff" style="display:none">
+          <div class="adj-pane-head"><b>模型分歧 diff</b>
+            <button id="diffBtn">显示 diff</button></div>
+          <pre class="adj-pre" id="adjTextDiff" style="display:none"></pre>
+        </div>
+        <div class="adj-pane">
+          <div class="adj-pane-head"><b>最终文本</b>
+            <span class="dim">选 A/B 后自动填入，可继续编辑；也可直接手写</span></div>
+          <textarea id="adjEdit" spellcheck="false"></textarea>
+          <div class="adj-actions">
+            <button class="primary" id="adjSaveBtn">保存并下一页</button>
+            <button id="adjSkipBtn">跳过</button>
+            <span id="adjMsg" class="msg"></span>
+          </div>
+          <div class="adj-keys">快捷键：A / B 选版 · Ctrl+Enter 保存并下一页 · → 跳过</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="adjDone" class="card" style="display:none"></div>
+</div>
 
 </div>
 <script>
@@ -722,10 +1030,171 @@ async function cancelJob(id){
   refreshJobs();
 }
 
+/* ---- 人工精校 (adjudication) ---- */
+const adj={slug:null,pages:[],idx:0,saved:0,remaining:0,picked:null,
+  pickedText:'',texts:{a:'',b:''},diffLoaded:false};
+const STZH={adjudicate:'待裁决',escalated:'已升级',error:'出错',
+  missing:'无台账',verified:'已核验'};
+
+async function loadAdjSummary(){
+  try{const {ok,d}=await j('/api/adjudicate');
+    if(ok&&Array.isArray(d))renderAdjSummary(d);}catch(e){}
+}
+function renderAdjSummary(list){
+  $('adjEmpty').style.display=list.length?'none':'';
+  const box=$('adjList');box.innerHTML='';
+  list.forEach(s=>{
+    const parts=Object.keys(s.by_status||{}).sort()
+      .map(k=>(STZH[k]||k)+' '+s.by_status[k]);
+    const div=document.createElement('div');div.className='job adj-row';
+    div.innerHTML='<div class="job-head"><div class="job-title"><b>'+esc(s.slug)
+      +'</b><span class="dim">'+s.pending+' 页待精校'
+      +(parts.length?'（'+esc(parts.join(' · '))+'）':'')+'</span></div>'
+      +'<button class="btn-adj">开始精校</button></div>';
+    div.querySelector('.btn-adj').onclick=()=>startAdj(s.slug);
+    box.appendChild(div);
+  });
+}
+
+async function startAdj(slug){
+  try{
+    const res=await j('/api/adjudicate/'+encodeURIComponent(slug));
+    if(!res.ok){alert('加载失败：'+(res.d.error||('HTTP '+res.status)));return;}
+    adj.slug=slug;adj.pages=res.d;adj.idx=0;adj.saved=0;adj.remaining=res.d.length;
+    $('mainView').style.display='none';$('adjView').style.display='';
+    document.querySelector('.wrap').classList.add('adj-open');
+    window.scrollTo(0,0);
+    showAdjPage();
+  }catch(e){alert('加载失败：'+e);}
+}
+function closeAdj(){
+  $('adjView').style.display='none';$('mainView').style.display='';
+  document.querySelector('.wrap').classList.remove('adj-open');
+  loadAdjSummary();
+}
+
+function showAdjPage(){
+  const msg=$('adjMsg');msg.textContent='';msg.className='msg';
+  if(adj.idx>=adj.pages.length){showAdjDone();return;}
+  $('adjBody').style.display='';$('adjDone').style.display='none';
+  const p=adj.pages[adj.idx];
+  adj.picked=null;adj.pickedText='';adj.diffLoaded=false;adj.texts={a:'',b:''};
+  paneMark(null);
+  $('adjProgress').innerHTML='第 <b>'+(adj.idx+1)+'</b> / '+adj.pages.length
+    +' 页 · <b>'+esc(p.page)+'</b> · 状态 '+esc(STZH[p.status]||p.status)
+    +(p.similarity!=null?' · 相似度 '+esc(p.similarity):'')
+    +(p.note_or_error?' · <span class="dim">'+esc(p.note_or_error)+'</span>':'');
+  if(p.image_url){
+    $('adjImg').src=p.image_url;$('adjImgLink').href=p.image_url;
+    $('adjImgLink').style.display='';$('adjNoImg').style.display='none';
+  }else{$('adjImgLink').style.display='none';$('adjNoImg').style.display='';}
+  $('adjEdit').value='';
+  loadTranscript('a',p.a_url,$('adjTextA'));
+  loadTranscript('b',p.b_url,$('adjTextB'));
+  $('paneDiff').style.display=p.has_diff?'':'none';
+  const dp=$('adjTextDiff');dp.style.display='none';dp.textContent='';
+  $('diffBtn').textContent='显示 diff';
+}
+async function loadTranscript(which,url,el){
+  if(!url){el.textContent='（无该模型转录）';return;}
+  el.textContent='加载中…';
+  try{const r=await fetch(url);adj.texts[which]=await r.text();
+    el.textContent=adj.texts[which];}
+  catch(e){el.textContent='（加载失败：'+e+'）';}
+}
+function paneMark(which){
+  $('paneA').classList.toggle('picked',which==='a');
+  $('paneB').classList.toggle('picked',which==='b');
+}
+function pick(which){
+  const p=adj.pages[adj.idx];if(!p)return;
+  if(!(which==='a'?p.a_url:p.b_url))return;
+  adj.picked=(which==='a')?'pick_a':'pick_b';
+  adj.pickedText=adj.texts[which];
+  $('adjEdit').value=adj.pickedText;
+  paneMark(which);
+}
+async function toggleDiff(){
+  const p=adj.pages[adj.idx];if(!p||!p.diff_url)return;
+  const pre=$('adjTextDiff');
+  if(pre.style.display==='none'){
+    if(!adj.diffLoaded){
+      try{const r=await fetch(p.diff_url);pre.textContent=await r.text();}
+      catch(e){pre.textContent='（diff 加载失败）';}
+      adj.diffLoaded=true;
+    }
+    pre.style.display='';$('diffBtn').textContent='收起 diff';
+  }else{pre.style.display='none';$('diffBtn').textContent='显示 diff';}
+}
+async function adjSave(){
+  const p=adj.pages[adj.idx];if(!p)return;
+  const val=$('adjEdit').value,msg=$('adjMsg');
+  let body;
+  if(adj.picked){
+    body={action:adj.picked};
+    if(val.trim()&&val!==adj.pickedText)body.text=val; // 编辑过的版本优先
+  }else if(val.trim()){
+    body={action:'custom',text:val};
+  }else{
+    msg.textContent='请先选 A/B 版本，或在文本框输入内容';msg.className='msg err';
+    return;
+  }
+  try{
+    const res=await j('/api/adjudicate/'+encodeURIComponent(adj.slug)+'/'
+      +encodeURIComponent(p.page),{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(res.ok){
+      adj.saved++;
+      if(typeof res.d.remaining==='number')adj.remaining=res.d.remaining;
+      adj.idx++;showAdjPage();
+    }else if(res.status===409){
+      msg.textContent='该页已有 verified 文件，自动跳到下一页';msg.className='msg err';
+      adj.idx++;setTimeout(showAdjPage,700);
+    }else{
+      msg.textContent='错误：'+(res.d.error||('HTTP '+res.status));msg.className='msg err';
+    }
+  }catch(e){msg.textContent='请求失败：'+e;msg.className='msg err';}
+}
+function adjSkip(){adj.idx++;showAdjPage();}
+function showAdjDone(){
+  $('adjBody').style.display='none';
+  const done=$('adjDone');done.style.display='';
+  done.innerHTML='<h2>本轮精校完成</h2>'
+    +'<p>已完成 <b>'+adj.saved+'</b> 页精校，<b>'+esc(adj.slug)+'</b> 剩余 <b>'
+    +adj.remaining+'</b> 页待处理。</p>'
+    +'<p class="dim" style="color:var(--muted)">建议：回到「新书导入」表单，选「仅质检（gate-only）」、'
+    +'slug 填 '+esc(adj.slug)+'，重跑质量门确认达标；达标后再走正式导入的后续步骤。</p>'
+    +'<div class="adj-actions"><button class="primary" id="adjGateBtn">去运行仅质检</button>'
+    +'<button id="adjDoneBack">返回</button></div>';
+  $('adjProgress').textContent=adj.slug+' · 精校完成';
+  $('adjGateBtn').onclick=()=>{
+    document.querySelector('input[name=mode][value="gate-only"]').checked=true;
+    modeChanged();$('slugIn').value=adj.slug;closeAdj();window.scrollTo(0,0);
+  };
+  $('adjDoneBack').onclick=closeAdj;
+}
+document.addEventListener('keydown',e=>{
+  if($('adjView').style.display==='none')return;
+  if($('adjBody').style.display==='none')return; // 完成卡片时不响应
+  if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();adjSave();return;}
+  const t=e.target;
+  if(t&&(t.tagName==='TEXTAREA'||t.tagName==='INPUT'))return;
+  if(e.key==='a'||e.key==='A'){e.preventDefault();pick('a');}
+  else if(e.key==='b'||e.key==='B'){e.preventDefault();pick('b');}
+  else if(e.key==='ArrowRight'){e.preventDefault();adjSkip();}
+});
+$('adjBack').onclick=closeAdj;
+$('pickABtn').onclick=()=>pick('a');
+$('pickBBtn').onclick=()=>pick('b');
+$('diffBtn').onclick=toggleDiff;
+$('adjSaveBtn').onclick=adjSave;
+$('adjSkipBtn').onclick=adjSkip;
+
 document.querySelectorAll('input[name=mode]').forEach(r=>r.onchange=modeChanged);
 $('firstIn').oninput=updateWarn; $('lastIn').oninput=updateWarn;
 $('submitBtn').onclick=submitForm;
 loadInfo(); refreshJobs(); setInterval(refreshJobs,2000);
+loadAdjSummary(); setInterval(loadAdjSummary,10000);
 </script>
 </body>
 </html>
@@ -772,7 +1241,53 @@ def make_handler(mgr, project, rag_port):
                 else:
                     self._json(job)
                 return
+            if path == "/api/adjudicate":
+                self._json(adj_summary(mgr.staging))
+                return
+            m = re.match(r"^/api/adjudicate/([^/]+)/?$", path)
+            if m:
+                pages = adj_pages(mgr.staging, unquote(m.group(1)))
+                if pages is None:
+                    self._json({"error": "slug not found in staging"}, 404)
+                else:
+                    self._json(pages)
+                return
+            if path.startswith("/staging/"):
+                self._staging_file(unquote(path[len("/staging/"):]))
+                return
             self._json({"error": "not found"}, 404)
+
+        def _staging_file(self, rel):
+            """Serve one file from under STAGING only. The resolved target must
+            stay inside STAGING (traversal -> 404); no directory listings."""
+            base = mgr.staging.resolve()
+            try:
+                target = (base / rel).resolve()
+            except (OSError, ValueError):
+                self._json({"error": "not found"}, 404)
+                return
+            if not is_within(target, base) or not target.is_file():
+                self._json({"error": "not found"}, 404)
+                return
+            ext = target.suffix.lower()
+            if ext == ".png":
+                ctype = "image/png"
+            elif ext in (".jpg", ".jpeg"):
+                ctype = "image/jpeg"
+            elif ext in (".md", ".diff", ".txt", ".json", ".jsonl"):
+                ctype = "text/plain; charset=utf-8"
+            else:
+                ctype = "application/octet-stream"
+            try:
+                data = target.read_bytes()
+            except OSError:
+                self._json({"error": "not found"}, 404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
         def do_POST(self):
             path = urlsplit(self.path).path
@@ -796,6 +1311,20 @@ def make_handler(mgr, project, rag_port):
             m = re.match(r"^/api/jobs/([0-9a-zA-Z\-]+)/cancel$", path)
             if m:
                 out, code = mgr.cancel(m.group(1))
+                self._json(out, code)
+                return
+            m = re.match(r"^/api/adjudicate/([^/]+)/([^/]+)$", path)
+            if m:
+                try:
+                    body = json.loads(raw or b"{}")
+                except json.JSONDecodeError:
+                    self._json({"error": "invalid JSON body"}, 400)
+                    return
+                if not isinstance(body, dict):
+                    self._json({"error": "body must be a JSON object"}, 400)
+                    return
+                out, code = adj_save(mgr.staging, unquote(m.group(1)),
+                                     unquote(m.group(2)), body)
                 self._json(out, code)
                 return
             self._json({"error": "not found"}, 404)
