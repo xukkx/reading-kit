@@ -420,7 +420,19 @@ class JobManager:
                 except OSError:
                     continue
         return {"project": project, "root": str(self.root), "ragPort": rag_port,
-                "collections": cols, "pdfs": pdfs, "jobs_dir": str(self.jobs_dir)}
+                "collections": cols, "pdfs": pdfs,
+                "imported_pdfs": sorted(self.imported_pdfs()),
+                "jobs_dir": str(self.jobs_dir)}
+
+    def imported_pdfs(self):
+        """Normalized pdf paths of every PASSED full import — the dropdown
+        marks these and create_job refuses them without explicit consent."""
+        with self.lock:
+            return {(j["params"].get("pdf") or "").replace("\\", "/")
+                    for j in self.jobs.values()
+                    if j["state"] == "passed"
+                    and j["params"].get("mode") == "import"
+                    and j["params"].get("pdf")}
 
     def list_jobs(self):
         with self.lock:
@@ -514,6 +526,18 @@ class JobManager:
                                       f"Books/{cdir.name}/{title}/正文.md）。"
                                       "重跑会复用已完成的 OCR/共识阶段、"
                                       "更新正文与索引，不会重复花钱。"), 409
+            # same PDF under a DIFFERENT title would silently duplicate the
+            # book (and re-spend OCR): the title guard can't see it, job
+            # history can
+            if pdf and pdf.replace("\\", "/") in self.imported_pdfs():
+                for jb in self.jobs.values():
+                    if (jb["state"] == "passed" and jb["params"].get("mode") == "import"
+                            and (jb["params"].get("pdf") or "").replace("\\", "/")
+                            == pdf.replace("\\", "/")):
+                        return None, ("CONFIRM:这个 PDF 此前已导入为《"
+                                      f"{jb['params'].get('title') or jb['slug']}》"
+                                      f"（任务 {jb['id']}）。用新书名重跑会生成"
+                                      "一本重复的书并重新花 OCR 的钱。"), 409
 
         with self.lock:
             for jb in self.jobs.values():
@@ -898,8 +922,11 @@ async function loadInfo(){
     $('rootLbl').textContent=d.root||'';
     if(d.ragPort){const a=$('ragLink');a.href='http://localhost:'+d.ragPort+'/';
       a.textContent='RAG 服务 :'+d.ragPort;a.style.display='';}
+    const done=new Set(d.imported_pdfs||[]);
     (d.pdfs||[]).forEach(p=>{const o=document.createElement('option');
-      o.value=p;o.textContent=p;$('pdfSelect').appendChild(o);});
+      o.value=p;
+      o.textContent=done.has(p.replace(/\\/g,'/'))?p+'　✅ 已导入过':p;
+      $('pdfSelect').appendChild(o);});
     (d.collections||[]).forEach(c=>{const o=document.createElement('option');
       o.value=c;$('collList').appendChild(o);});
   }catch(e){}
@@ -1420,7 +1447,23 @@ def main():
     print(f"[import-server] jobs:    {mgr.jobs_dir} "
           f"({mgr.restored} restored from disk)")
     print(f"[import-server] console: http://localhost:{port}/  (bound 0.0.0.0)")
-    ThreadingHTTPServer(("0.0.0.0", port), handler).serve_forever()
+
+    class ExclusiveServer(ThreadingHTTPServer):
+        # Windows maps allow_reuse_address (http.server's default) to
+        # SO_REUSEADDR, which lets a SECOND process silently double-bind the
+        # same port — whichever socket wins then serves, so a stale server
+        # can keep answering after a "restart" (bit us 2026-07-10: two
+        # consoles on :8866, old code served for hours). Exclusive bind makes
+        # the second start fail loudly instead.
+        allow_reuse_address = os.name != "nt"
+
+    try:
+        srv = ExclusiveServer(("0.0.0.0", port), handler)
+    except OSError as e:
+        sys.exit(f"[import-server] cannot bind port {port} — another server "
+                 f"is already running there ({e}). Stop it first, or pass "
+                 f"--port to use a different one.")
+    srv.serve_forever()
 
 
 if __name__ == "__main__":

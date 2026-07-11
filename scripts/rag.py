@@ -436,7 +436,17 @@ def cmd_serve(port):
     print(f"RAG endpoint: POST http://0.0.0.0:{port}  body: {{\"q\": \"问题\"}}")
     # ThreadingHTTPServer: a single wedged client connection must not block
     # every other request (with the plain HTTPServer even /health hangs).
-    ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
+    class ExclusiveServer(ThreadingHTTPServer):
+        # on Windows the http.server default (allow_reuse_address=True) maps
+        # to SO_REUSEADDR, letting a second process silently double-bind the
+        # port and hijack requests — make the second start fail loudly
+        allow_reuse_address = os.name != "nt"
+    try:
+        srv = ExclusiveServer(("0.0.0.0", port), H)
+    except OSError as e:
+        sys.exit(f"[serve] cannot bind port {port} — another server is "
+                 f"already running there ({e}).")
+    srv.serve_forever()
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
