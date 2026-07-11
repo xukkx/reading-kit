@@ -499,6 +499,22 @@ class JobManager:
                 return None, "min_verified_ratio 必须在 (0, 1] 内", 400
 
         job_slug = slug or sanitize_slug(title)
+
+        # full re-import of a book already on the shelf needs explicit consent
+        # (legitimate when folding in adjudicated pages — it resumes, not
+        # re-OCRs — but never silently: the job history already confuses
+        # people enough without unasked-for reruns)
+        if mode == "import" and title and not body.get("confirm"):
+            books = self.vault / "Books"
+            if books.is_dir():
+                for cdir in books.iterdir():
+                    note = cdir / title / "正文.md"
+                    if note.exists():
+                        return None, ("CONFIRM:这本书已在架（"
+                                      f"Books/{cdir.name}/{title}/正文.md）。"
+                                      "重跑会复用已完成的 OCR/共识阶段、"
+                                      "更新正文与索引，不会重复花钱。"), 409
+
         with self.lock:
             for jb in self.jobs.values():
                 if jb["slug"] == job_slug and jb["state"] in ("queued", "running"):
@@ -690,6 +706,10 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff;fo
 button.primary:hover{opacity:.9;color:#fff}
 .msg{margin-left:10px;font-size:13px}
 .msg.ok{color:var(--ok)} .msg.err{color:var(--err)}
+details.hist{margin:-6px 0 14px 14px}
+details.hist summary{cursor:pointer;color:var(--muted);font-size:12px;
+padding:2px 0;user-select:none}
+details.hist .job{opacity:.75;margin-top:8px}
 .job{background:var(--card);border:1px solid var(--line);border-radius:10px;
   padding:14px 16px;margin-top:12px}
 .job-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
@@ -912,8 +932,15 @@ async function submitForm(){
   if(r)body.min_verified_ratio=Number(r);
   const msg=$('formMsg');
   try{
-    const res=await j('/api/import',{method:'POST',
+    let res=await j('/api/import',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!res.ok&&res.d.needs_confirm){
+      if(!confirm(res.d.error+'\n\n确定要重跑这本书吗？')){
+        msg.textContent='已取消（该书已在架，未重复提交）。';msg.className='msg';return;}
+      body.confirm=true;
+      res=await j('/api/import',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    }
     if(res.ok){msg.textContent='已加入队列：'+res.d.id;msg.className='msg ok';refreshJobs();}
     else{msg.textContent='错误：'+(res.d.error||('HTTP '+res.status));msg.className='msg err';}
   }catch(e){msg.textContent='请求失败：'+e;msg.className='msg err';}
@@ -987,14 +1014,40 @@ function updateCard(el,job){
   el.querySelector('.gate').innerHTML=gateHtml(job);
 }
 
+const histOpen=new Set();
 function renderJobs(jobs){
   $('emptyHint').style.display=jobs.length?'none':'';
   const box=$('jobs');
-  jobs.forEach((job,i)=>{
-    let card=cards.get(job.id);
-    if(!card){card=makeCard(job);cards.set(job.id,card);
-      box.insertBefore(card,box.children[i]||null);}
-    updateCard(card,job);
+  /* one group per book (slug): newest run as the card, older runs collapsed
+     under it — a book's gate re-checks and resumes are HISTORY, not duplicates */
+  const groups=new Map();
+  jobs.forEach(job=>{
+    if(!groups.has(job.slug))groups.set(job.slug,[]);
+    groups.get(job.slug).push(job);
+  });
+  box.textContent='';
+  groups.forEach((list,slug)=>{
+    const latest=list[0];
+    let card=cards.get(latest.id);
+    if(!card){card=makeCard(latest);cards.set(latest.id,card);}
+    updateCard(card,latest);
+    box.appendChild(card);
+    if(list.length>1){
+      const det=document.createElement('details');det.className='hist';
+      if(histOpen.has(slug))det.open=true;
+      det.addEventListener('toggle',()=>{
+        if(det.open)histOpen.add(slug);else histOpen.delete(slug);});
+      const sum=document.createElement('summary');
+      sum.textContent='本书另有 '+(list.length-1)+' 次历史运行（质检 / 重跑记录，同一本书）';
+      det.appendChild(sum);
+      list.slice(1).forEach(job=>{
+        let c=cards.get(job.id);
+        if(!c){c=makeCard(job);cards.set(job.id,c);}
+        updateCard(c,job);
+        det.appendChild(c);
+      });
+      box.appendChild(det);
+    }
   });
 }
 
@@ -1304,7 +1357,10 @@ def make_handler(mgr, project, rag_port):
                     return
                 job, err, code = mgr.create_job(body)
                 if err:
-                    self._json({"error": err}, code)
+                    if err.startswith("CONFIRM:"):
+                        self._json({"error": err[8:], "needs_confirm": True}, code)
+                    else:
+                        self._json({"error": err}, code)
                 else:
                     self._json({"id": job["id"]})
                 return

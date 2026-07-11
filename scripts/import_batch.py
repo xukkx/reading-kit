@@ -375,6 +375,8 @@ def main():
                        "collection": item["collection"], "mode": args.mode}
             if args.min_verified_ratio:
                 payload["min_verified_ratio"] = args.min_verified_ratio
+            if args.force:
+                payload["confirm"] = True  # console guards on-shelf reruns
             out, err = submit_console(port, payload)
             if err and "unreachable" in err:
                 sys.exit(f"\n[batch] import console not running on :{port} — start it "
