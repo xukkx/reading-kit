@@ -47,6 +47,11 @@ sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parent.parent
 VAULT = ROOT / "vault"
 RAG = ROOT / ".rag"
+# Optional kb_substrate drop-in (not on PyPI): a kb_substrate/ folder placed in
+# <project>\vendor\ enables /recall and /remember with no pip install.
+_VENDOR = ROOT / "vendor"
+if _VENDOR.is_dir():
+    sys.path.insert(0, str(_VENDOR))
 EMBED_MODEL = "bge-m3"
 OLLAMA_LOCAL = "http://localhost:11434"
 

@@ -41,6 +41,11 @@ ROOT = Path(__file__).resolve().parent.parent
 VAULT = ROOT / "vault"
 STAGING = ROOT / "staging"
 REGISTRY = Path.home() / ".reading-kit" / "registry.json"
+# Optional dependency drop-in: a kb_substrate/ folder placed in <project>\vendor\
+# is importable with no pip install (the package is not on PyPI).
+VENDOR = ROOT / "vendor"
+if VENDOR.is_dir():
+    sys.path.insert(0, str(VENDOR))
 
 
 def book_source_uri(out_arg):
@@ -119,7 +124,13 @@ def main():
     ap.add_argument("--force", action="store_true", help="re-ingest pages already in substrate_ledger.jsonl")
     args = ap.parse_args()
 
-    import kb_substrate  # deferred: only required once the substrate work actually runs
+    try:
+        import kb_substrate  # deferred: only required once the substrate work actually runs
+    except ImportError:
+        print("[substrate] kb_substrate 未安装 — 已跳过原子化入库（可选功能，"
+              "不影响阅读与 AI 问答）。启用方法：把 kb_substrate 文件夹放进项目根的 "
+              "vendor\\ 目录即可，无需任何安装命令。")
+        sys.exit(0)
 
     vdir = STAGING / args.slug / "verified"
     pages_dir = STAGING / args.slug / "pages"

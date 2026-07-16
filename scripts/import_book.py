@@ -41,6 +41,16 @@ SECRETS = Path.home() / ".secrets"
 
 # ---------- small helpers ----------
 
+def substrate_available(root):
+    """kb_substrate is optional and not on PyPI: importable if pip-installed,
+    or if the user dropped the kb_substrate/ folder into <project>\\vendor\\."""
+    import importlib.util
+    vendor = root / "vendor"
+    if vendor.is_dir() and str(vendor) not in sys.path:
+        sys.path.insert(0, str(vendor))
+    return importlib.util.find_spec("kb_substrate") is not None
+
+
 def sanitize_slug(text):
     """Filesystem-safe slug: word chars (incl. CJK) and dashes only."""
     s = re.sub(r"[^\w\-]+", "-", text).strip("-")
@@ -429,8 +439,11 @@ def main():
               f"(threshold {args.min_verified_ratio})")
         print(f"[plan]   4. {script('reflow.py')} --slug {slug} --first {first} "
               f"--last {last_s} --title {title} --out {out_dir}")
-        print(f"[plan]   5. {script('substrate_build.py')} --slug {slug} "
-              f"--out {out_dir} --first {first} --last {last_s} --db {db}")
+        if substrate_available(root):
+            print(f"[plan]   5. {script('substrate_build.py')} --slug {slug} "
+                  f"--out {out_dir} --first {first} --last {last_s} --db {db}")
+        else:
+            print("[plan]   5. substrate_build.py  [SKIP - kb_substrate 未安装，可选功能]")
         print(f"[plan]   6. {script('rag.py')} build"
               + (f" --collection {collection}" if collection else "  (all collections)"))
         entry, would_add = ensure_registered(root, dry_run=True)
@@ -469,10 +482,16 @@ def main():
                          "--slug", slug, "--first", first, "--last", last,
                          "--title", title, "--out", out_dir])
 
-    # ---- stage 5: kb_substrate ingestion
-    run_stage("substrate_build", [sys.executable, script("substrate_build.py"),
-                                  "--slug", slug, "--out", out_dir,
-                                  "--first", first, "--last", last, "--db", db])
+    # ---- stage 5: kb_substrate ingestion (optional — the package is not on
+    # PyPI; a fresh install runs fine without it and can enable it later by
+    # dropping the kb_substrate/ folder into <project>\vendor\)
+    if substrate_available(root):
+        run_stage("substrate_build", [sys.executable, script("substrate_build.py"),
+                                      "--slug", slug, "--out", out_dir,
+                                      "--first", first, "--last", last, "--db", db])
+    else:
+        print("[skip] substrate: kb_substrate 未安装（可选功能，不影响阅读与 AI 问答）。"
+              "启用：把 kb_substrate 文件夹放进项目根的 vendor\\ 目录，之后的导入会自动入库。")
 
     # ---- stage 6: RAG index build
     build_cmd = [sys.executable, script("rag.py"), "build"]
