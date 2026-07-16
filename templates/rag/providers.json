@@ -13,7 +13,7 @@
     },
     "mimo": {
       "base_url": "https://api.siliconflow.cn/v1",
-      "key": "dpapi:mimo.dat",
+      "key": "dpapi:siliconflow.dat",
       "model": "XiaomiMiMo/MiMo-7B-RL"
     }
   },

@@ -1,12 +1,76 @@
 # setup.ps1 — Reading Kit 一键安装
 # 用法：git clone 后，在 reading-kit 目录里运行  pwsh -File setup.ps1 [-Target <安装目录>] [-Slug <项目简称>]
+# Hub 模式：pwsh -File setup.ps1 -Hub <总目录>  — 创建/刷新"一站式书房"（所有项目的唯一入口，
+#           含 junction、Inbox 批量导入、书架管家技能）。项目多了随时重跑，幂等。
 param(
     [string]$Target = (Join-Path (Split-Path $PSScriptRoot -Parent) "my-reading"),
-    [string]$Slug
+    [string]$Slug,
+    [string]$Hub
 )
 
 $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
+
+# ---------- Hub 模式（与项目安装互斥，做完即退出） ----------
+if ($Hub) {
+    $hubAbs = [System.IO.Path]::GetFullPath($Hub)
+    Write-Host "`n📚 Reading Hub 创建/刷新：$hubAbs" -ForegroundColor Cyan
+    foreach ($d in @('', 'Inbox', 'dashboard', '.claude\skills')) {
+        New-Item -ItemType Directory -Force (Join-Path $hubAbs $d) | Out-Null
+    }
+
+    # 注册表里的每个项目 → 一个 junction 入口（已存在则跳过；重跑=补新项目）
+    $regPath = "$HOME\.reading-kit\registry.json"
+    $projs = @()
+    if (Test-Path $regPath) { $projs = @((Get-Content $regPath -Raw | ConvertFrom-Json).projects) }
+    $rows = ""
+    foreach ($p in $projs) {
+        $link = Join-Path $hubAbs $p.slug
+        if (-not (Test-Path $link)) {
+            if (Test-Path $p.path) {
+                New-Item -ItemType Junction -Path $link -Target $p.path | Out-Null
+                Write-Host "   ✅ junction $($p.slug) → $($p.path)"
+            } else {
+                Write-Host "   ⚠️ 注册表中的项目路径不存在，跳过：$($p.path)" -ForegroundColor Yellow
+            }
+        }
+        $rows += "| ``$($p.slug)\`` | junction → ``$($p.path)`` (ragPort $($p.ragPort)) |`n"
+    }
+    if (-not $projs) {
+        Write-Host "   ℹ️ 注册表还没有任何项目 — 先跑 setup.ps1 -Target <目录> 建一个，再重跑本命令补 junction"
+    }
+
+    # 工具箱本身也挂一个 junction，hub 里的命令统一写 reading-kit\scripts\...
+    $kitLink = Join-Path $hubAbs 'reading-kit'
+    if (-not (Test-Path $kitLink)) {
+        New-Item -ItemType Junction -Path $kitLink -Target $kit | Out-Null
+        Write-Host "   ✅ junction reading-kit → $kit"
+    }
+
+    # hub.json / CLAUDE.md：只在缺失时生成，绝不覆盖用户已有配置
+    if (-not (Test-Path "$hubAbs\hub.json")) {
+        $defaultProject = if ($projs) { $projs[0].slug } else { "" }
+        (Get-Content "$kit\templates\hub\hub.json" -Raw) `
+            -replace '\{\{DEFAULT_PROJECT\}\}', $defaultProject | Set-Content "$hubAbs\hub.json"
+        Write-Host "   ✅ hub.json（defaultProject=$defaultProject；sources 留空——之后告诉 Claude 你的书攒在哪些文件夹即可）"
+    }
+    if (-not (Test-Path "$hubAbs\CLAUDE.md")) {
+        (Get-Content "$kit\templates\hub\CLAUDE.md" -Raw) `
+            -replace '\{\{PROJECT_ROWS\}\}', $rows | Set-Content "$hubAbs\CLAUDE.md"
+        Write-Host "   ✅ CLAUDE.md（hub 章程）"
+    }
+
+    # 书架管家技能子集（hub 里只需要这三个）
+    foreach ($s in @('library', 'getting-started', 'reading-system')) {
+        Copy-Item "$kit\skills\$s" "$hubAbs\.claude\skills\" -Recurse -Force
+    }
+    Write-Host "   ✅ 技能：library（书架管家）/ getting-started（新手引导）/ reading-system（运维）"
+
+    Write-Host "`n🎉 Hub 就绪。以后所有关于书的事，都在 $hubAbs 打开 Claude Code，说「书架」即可。" -ForegroundColor Green
+    Write-Host "   批量导入：把 PDF 丢进 Inbox\<合集名>\，对 Claude 说「导入 Inbox」。`n"
+    exit 0
+}
+
 Write-Host "`n📖 Reading Kit 安装向导" -ForegroundColor Cyan
 Write-Host "   安装到：$Target`n"
 
@@ -50,13 +114,21 @@ if ($existing) {
 Write-Host "`n1️⃣  检查依赖…"
 $py = Get-Command python -ErrorAction SilentlyContinue
 if (-not $py) { Write-Host "❌ 需要 Python 3.10+：https://www.python.org/downloads/（安装时勾选 Add to PATH）" -ForegroundColor Red; exit 1 }
-Write-Host "   ✅ python $(python --version 2>&1)"
+$pyVerRaw = "$(python --version 2>&1)"
+$pyVer = $null
+if ($pyVerRaw -match '(\d+)\.(\d+)') { $pyVer = [version]"$($Matches[1]).$($Matches[2])" }
+if (-not $pyVer -or $pyVer -lt [version]'3.10') {
+    Write-Host "❌ Python 3.10+ 是硬性要求，当前检测到：$pyVerRaw" -ForegroundColor Red
+    Write-Host "   （Microsoft Store 的 python 占位程序也会导致这里失败——请从 python.org 安装）" -ForegroundColor Red
+    exit 1
+}
+Write-Host "   ✅ $pyVerRaw"
 
-python -c "import numpy" 2>$null
-if ($LASTEXITCODE -ne 0) { Write-Host "   📦 安装 numpy…"; python -m pip install -q numpy }
-python -c "import requests" 2>$null
-if ($LASTEXITCODE -ne 0) { Write-Host "   📦 安装 requests…"; python -m pip install -q requests }
-Write-Host "   ✅ numpy / requests"
+foreach ($m in 'numpy', 'requests', 'pypdf') {
+    python -c "import $m" 2>$null
+    if ($LASTEXITCODE -ne 0) { Write-Host "   📦 安装 $m…"; python -m pip install -q $m }
+}
+Write-Host "   ✅ numpy / requests / pypdf"
 
 $poppler = Get-Command pdftoppm -ErrorAction SilentlyContinue
 if ($poppler) { Write-Host "   ✅ poppler (pdftoppm)" }
@@ -74,8 +146,8 @@ if ($ollama) {
 Write-Host "`n2️⃣  API 密钥（直接回车=跳过；之后可重跑本脚本补充）"
 New-Item -ItemType Directory -Force "$HOME\.secrets" | Out-Null
 $keys = @(
-    @{n='PaddleOCR 令牌（扫描书 OCR，aistudio.baidu.com 免费申请）'; f='paddleocr.dat'},
-    @{n='Ollama Cloud 密钥（问答模型，ollama.com/settings）';        f='ollama-cloud.dat'},
+    @{n='PaddleOCR 令牌（扫描书 OCR 必需，aistudio.baidu.com 免费申请）'; f='paddleocr.dat'},
+    @{n='Ollama Cloud 密钥（扫描书 OCR 校验必需 + AI 问答，ollama.com/settings）'; f='ollama-cloud.dat'},
     @{n='DeepSeek 密钥（可选，platform.deepseek.com）';               f='deepseek.dat'},
     @{n='SiliconFlow 密钥（可选：云端嵌入 + MiMo）';                   f='siliconflow.dat'}
 )
@@ -133,10 +205,15 @@ if (-not (Test-Path $pluginDataPath)) {
 
 New-Item -ItemType Directory -Force "$Target\.claude\skills" | Out-Null
 Copy-Item "$kit\skills\*" "$Target\.claude\skills\" -Recurse -Force
-foreach ($t in 'CLAUDE.md','AGENTS.md') { if (-not (Test-Path "$Target\$t")) { Copy-Item "$kit\templates\$t" "$Target\" } }
+foreach ($t in 'CLAUDE.md','AGENTS.md','opencode.json') { if (-not (Test-Path "$Target\$t")) { Copy-Item "$kit\templates\$t" "$Target\" } }
 New-Item -ItemType Directory -Force "$Target\.rag" | Out-Null
 if (-not (Test-Path "$Target\.rag\providers.json")) { Copy-Item "$kit\templates\rag\providers.json" "$Target\.rag\" }
-Write-Host "   ✅ Claude 技能 / 配置模板已就位"
+New-Item -ItemType Directory -Force "$Target\vendor" | Out-Null
+if (-not (Test-Path "$Target\vendor\README.md")) { Copy-Item "$kit\vendor\README.md" "$Target\vendor\" }
+if (-not (Test-Path "$Target\start_rag_server.vbs")) {
+    (Get-Content "$kit\templates\rag\start_rag_server.vbs" -Raw).Replace('{{PYTHON_EXE}}', $py.Source).Replace('{{PROJECT_ROOT}}', $targetAbs).Replace('{{RAG_PORT}}', "$ragPort") | Set-Content "$Target\start_rag_server.vbs"
+}
+Write-Host "   ✅ Claude 技能 / 配置模板 / vendor（可选依赖拖入处）/ 开机自启脚本 已就位"
 
 # ---------- 4. 局域网（手机访问用） ----------
 $fwRuleName = "Reading Kit RAG - $projSlug"
@@ -163,7 +240,10 @@ Write-Host "接下来：" -ForegroundColor Green
 Write-Host "   1. Obsidian → Open folder as vault → $Target\vault"
 Write-Host "      （Settings → Community plugins → 关闭 Restricted mode → 启用 Vault RAG）"
 Write-Host "   2. 问答服务：cd $Target ; python scripts\rag.py serve --port $ragPort"
-Write-Host "   3. 导入第一本书：把 PDF 给 Claude Code，说 /read-book <路径>"
-Write-Host "      （或手动跑 CLAUDE.md 里的四条流水线命令）"
+Write-Host "   3. 导入第一本书（三选一）："
+Write-Host "      · 新手推荐：在项目目录打开 Claude Code，说「带我入门」（getting-started 分步引导）"
+Write-Host "      · 网页控制台：python -X utf8 scripts\import_server.py → 浏览器开 http://localhost:$($ragPort+100)"
+Write-Host "      · 命令行：python -X utf8 scripts\import_book.py --pdf <路径> --title <书名>"
 Write-Host "   4. 打开 vault 里的 [[使用说明]] — 日常操作全在里面"
-Write-Host "   5. 想同步到手机：vault 里的 [[同步设置]] —— 远程目录名已经帮你填好了`n"
+Write-Host "   5. 想同步到手机：vault 里的 [[同步设置]] —— 远程目录名已经帮你填好了"
+Write-Host "   6. 书多/项目多之后：pwsh -File setup.ps1 -Hub <总目录> 建一站式书房（Inbox 批量导入 + 书架管家）`n"
