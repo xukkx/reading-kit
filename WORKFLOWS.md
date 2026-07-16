@@ -16,7 +16,7 @@ python scripts\import_book.py --pdf D:\书.pdf --title 书名 --collection 分�
 2. 双模型共识校验防幻觉（`ingest.py`：OCR 底稿 vs 独立视觉大模型，字符级比对，判定写入 `staging/ledger.jsonl`）
 3. **质量门**：`verified 页数 / 区间总页数 >= --min-verified-ratio`（默认 0.85）。不达标即停（退出码 2），打印逐页失败原因与升级报告，staging 保留复用——**不会**自动跑陪审团
 4. 重排为阅读版正文（`reflow.py`，带页码锚点）
-5. kb_substrate 入库（`substrate_build.py`）+ RAG 索引（`rag.py build`）
+5. kb_substrate 入库（`substrate_build.py`；可选功能——未装该包时自动跳过，见 `vendor/README.md`）+ RAG 索引（`rag.py build`）
 6. 确保项目已注册到 `~\.reading-kit\registry.json`
 
 注意：**多书合订 PDF 必须用 `--first/--last` 按书拆开、分次导入**（此前发生过两本书的合订 PDF 被当成一本导入的事故；不给这两个参数时 import_book.py 会打印显眼警告）。
@@ -30,7 +30,7 @@ python scripts\import_book.py --pdf D:\书.pdf --title 书名 --collection 分�
 3. 3 模型陪审团逐页表决（binary rubric 投票）
 4. 人工复核轮次（陪审团分歧页逐页裁决，可多轮）
 
-现状：**有意不自动化**。以可改编脚本的形式存在于 张献翼 项目的 `staging/jury_*` 目录与 `swarm-jury` 技能中，每本书按需改编。人工复核是流程的组成部分，不是待修的缺陷。
+现状：**有意不自动化**——标点迁移规则和陪审团提示词按书情差异很大，每本书从上述四步按需编写脚本（模型调用可复用 `worker.ps1` 的云代工通道）。人工复核是流程的组成部分，不是待修的缺陷。
 
 ## 升级策略（两条工作流的衔接）
 
@@ -40,16 +40,16 @@ python scripts\import_book.py --pdf D:\书.pdf --title 书名 --collection 分�
 
 ## 批量导入（import_batch.py）
 
-几十上百本书不必逐本填表：**文件夹就是元数据**。把 PDF 按合集丢进收件箱——
+几十上百本书不必逐本填表：**文件夹就是元数据**。收件箱由 `setup.ps1 -Hub <总目录>` 创建（一并生成项目 junction、hub.json、书架管家技能）。把 PDF 按合集丢进去——
 
 ```
-Inbox\女性文学\书名A.pdf     ← 子文件夹名 = 合集，文件名 = 书名
-Inbox\比较文学\书名B.pdf
+Inbox\比较文学\书名A.pdf     ← 子文件夹名 = 合集，文件名 = 书名
+Inbox\现代小说\书名B.pdf
 ```
 
 ```powershell
-python scripts\import_batch.py D:\AI_Projects\Reading_Hub\Inbox        # 只看计划
-python scripts\import_batch.py D:\AI_Projects\Reading_Hub\Inbox --go   # 全部提交进控制台串行队列
+python scripts\import_batch.py <书房>\Inbox        # 只看计划
+python scripts\import_batch.py <书房>\Inbox --go   # 全部提交进控制台串行队列
 ```
 
 - 已在架的书自动跳过（`--force` 重导）；控制台对排队中的重复 slug 返回 409——重跑安全。
@@ -58,12 +58,12 @@ python scripts\import_batch.py D:\AI_Projects\Reading_Hub\Inbox --go   # 全部�
 - **合订本不能批量**——单独用 `--first/--last` 拆书导入。
 
 用户甚至不必往 Inbox 放文件：把书堆积的文件夹登记进 `hub.json` 的 `sources`
-（`[{"path": "...", "collection": "女性文学"}]`），然后——
+（`[{"path": "...", "collection": "比较文学"}]`），然后——
 
 ```powershell
 python scripts\import_batch.py Inbox --scan        # 列候选：新 / 已在架 / 疑似已导入（按书名+字节大小双重去重）
 python scripts\import_batch.py Inbox --pull all    # 只把「新」书拉进收件箱（自动清洗 z-library 式文件名）
-python scripts\import_batch.py Inbox --pull 2=倾城之恋   # 或逐本挑选、顺手改书名
+python scripts\import_batch.py Inbox --pull 2=正确书名   # 或逐本挑选、顺手改书名
 ```
 
 ## 网页控制台（import_server.py）
@@ -71,7 +71,7 @@ python scripts\import_batch.py Inbox --pull 2=倾城之恋   # 或逐本挑选�
 「快速阅读」导入的本地网页界面，浏览器里填表提交、看队列：
 
 ```powershell
-python scripts\import_server.py                 # 默认端口 = 本项目 ragPort + 100（complit 8866 / zhangxianyi 8867；未注册项目 8830）
+python scripts\import_server.py                 # 默认端口 = 本项目 ragPort + 100（如 ragPort 8766 → 控制台 8866；未注册项目 8830）
 python scripts\import_server.py --port 8888 --root D:\某个部署
 ```
 

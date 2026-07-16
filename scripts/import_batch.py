@@ -5,31 +5,31 @@ import_batch.py — sweep a whole folder of PDFs into the import pipeline.
 THE convention (folder = metadata, zero forms):
 
     Inbox\
-      女性文学\        ← subfolder name = target 合集 (collection)
+      比较文学\        ← subfolder name = target 合集 (collection)
         书名A.pdf      ← filename = 书名 (title)
         书名B.pdf
-      比较文学\
+      现代小说\
         书名C.pdf
       书名D.pdf        ← loose PDF: --collection, else goes to 未分类
 
-One command plans/executes the whole tree:
+One command plans/executes the whole tree (Inbox is created by setup.ps1 -Hub):
 
-    python scripts/import_batch.py D:\AI_Projects\Reading_Hub\Inbox           # PLAN only
-    python scripts/import_batch.py D:\AI_Projects\Reading_Hub\Inbox --go     # copy + submit to console queue
-    python scripts/import_batch.py Inbox --go --run                          # no console: run serially here
+    python scripts/import_batch.py <hub>\Inbox           # PLAN only
+    python scripts/import_batch.py <hub>\Inbox --go      # copy + submit to console queue
+    python scripts/import_batch.py Inbox --go --run      # no console: run serially here
 
 The user should NEVER move files by hand. Book sources (folders where PDFs
 naturally accumulate — download dirs, archive drives) are registered once in
 hub.json next to the Inbox:
 
-    {"defaultProject": "complit",
-     "sources": [{"path": "H:\\...\\女性文学材料包", "collection": "女性文学"}]}
+    {"defaultProject": "myreading",
+     "sources": [{"path": "E:\\...\\书堆文件夹", "collection": "比较文学"}]}
 
 then discovery is automatic:
 
     python scripts/import_batch.py Inbox --scan            # list candidates: 新 / 已在架 / 疑似已导入
     python scripts/import_batch.py Inbox --pull all        # copy every 新 candidate into Inbox
-    python scripts/import_batch.py Inbox --pull 2=倾城之恋 --pull 3   # pick + retitle
+    python scripts/import_batch.py Inbox --pull 2=正确书名 --pull 3   # pick + retitle
     # then the normal plan / --go flow above
 
 Behavior:

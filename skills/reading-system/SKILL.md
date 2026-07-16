@@ -43,10 +43,10 @@ Division of judgment: workers grind (OCR, transcripts), Claude judges (adjudicat
 | Symptom | Cause & fix |
 |---|---|
 | "0 plugins installed" | User opened the **project root** as vault, not `vault/`. Fix: Manage vaults → Open folder as vault → the `vault` subfolder |
-| Ribbon button says 先打开一本书 though book is open | Sidebar stole focus; plugin ≥0.2.3 falls back to most-recent markdown leaf — check version |
+| Ribbon button says 先打开一本书 though book is open | Sidebar stole focus; the plugin falls back to the most-recent markdown leaf — if this still reproduces, the installed plugin copy is ancient: reinstall from the kit |
 | User types commands into search box | Search pane ≠ command palette. Point to the 📖 ribbon menu (built for exactly this) |
 | AI 报错 ⚠️ in panel | `rag.py serve` not running on the PC, or phone still pointing at `localhost` instead of PC LAN IP |
-| New annotations not retrievable | Index is manual: 📖 menu → 🔄 重建知识库索引 (POST `{"cmd":"rebuild"}`) |
+| New annotations not retrievable | Index is manual: 📖 menu → 🔄 重建当前收藏索引 / 重建全部收藏索引 (POST `{"cmd":"rebuild"}`) |
 | OCR verify floods "escalated" | Check for systematic cause before re-running (punctuation width, dropped footnotes → containment metric handles; genuinely new pattern → fix `normalize()`/thresholds in ingest.py) |
 | Worker errors twice on a page | Rule: Claude reads the page image personally, transcribes, logs `escalated-manual` to ledger |
 | `opencode run`: file flag eats prompt | Prompt must precede `--file`; must run from project root |

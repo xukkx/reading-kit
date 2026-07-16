@@ -70,8 +70,11 @@ SUBFOLDER** of the target, not the project root. This is the #1 new-user trap
 ("0 plugins installed" = they opened the root). Verify: Settings → Community
 plugins shows `vault-rag` enabled.
 
-Keys needed: `paddleocr.dat` (OCR, required for scanned books), `ollama-cloud.dat`
-(consensus model B + Q&A answers). Re-run setup.ps1 anytime to add missing keys.
+Keys needed: `paddleocr.dat` AND `ollama-cloud.dat` — **both are required for
+every scanned-book import** (PaddleOCR reads the pages; ollama-cloud runs the
+independent second transcription that the anti-hallucination consensus needs;
+it doubles as the Q&A model). Text-layer-only usage needs neither. Re-run
+setup.ps1 anytime to add missing keys.
 
 ## Stage 2 — 第一本书 (the default path: web console)
 
@@ -123,10 +126,10 @@ The gate = verified pages / total pages in range, threshold `--min-verified-rati
    仅质检 to confirm, then re-run the import (skips completed stages).
 3. **Fail — exit code 2** → this book exceeds what consensus can handle
    (woodblock scans, bad print). Escalate to 学术精校: staging artifacts are
-   reused as-is (no re-OCR cost). Route via the `swarm-jury` skill; the jury
-   scripts live in the 张献翼 project's `staging/jury_*` as adaptable templates.
-   This is deliberately NOT automated — human review rounds are part of the
-   design, not a defect.
+   reused as-is (no re-OCR cost). The jury process (mechanical punctuation
+   transfer → 3-model page voting → human rounds) is scripted per book from
+   the steps in `WORKFLOWS.md` 场景二 — deliberately NOT automated; human
+   review rounds are part of the design, not a defect.
 
 ## Stage 4 — 读·批注·问 AI (daily loop)
 
@@ -135,11 +138,13 @@ Make sure the answer server runs on the PC: `python scripts\rag.py serve`
 
 - Open `Books\<合集>\<书名>\正文.md`. Page anchors (`data-p`) let citations jump
   to the exact page.
-- Select text → floating toolbar: **✍️批注** (annotation, saved to 10-Notes) or
-  **❓问AI** (asks with the selection as context).
+- Select text → floating toolbar: **✍️批注** (saved to `批注.md` beside the book,
+  with the page number recorded) or **❓问AI** (asks with the selection as
+  context; archived Q&A goes to `AI问答存档.md`).
 - 📖 ribbon menu = command center: open Q&A panel 💬, jump to page #,
-  **🔄 重建知识库索引** — run this after adding annotations, indexing is manual
-  by design. Rebuilds are incremental (only changed files re-embed).
+  **🔄 重建当前收藏索引 / 重建全部收藏索引** — run one of these after adding
+  annotations, indexing is manual by design. Rebuilds are incremental (only
+  changed files re-embed).
 - Answers cite 书名+页码; quotes entering the vault must match a verified
   transcript — if the AI can't cite it, it doesn't say it.
 
@@ -157,7 +162,10 @@ still pointing at `localhost` → ⚠️ in the panel.
 
 ## Stage 6 — 批量扩库
 
-Many books at once: drop PDFs into the hub's `Inbox\<合集>\书名.pdf` (folder =
+Many books at once: first create the hub (one-time):
+`pwsh -File setup.ps1 -Hub <总目录>` — it scaffolds junctions to every
+registered project, `Inbox\`, `hub.json`, and the library-manager skills.
+Then drop PDFs into the hub's `Inbox\<合集>\书名.pdf` (folder =
 collection, filename = title) and sweep the lot —
 `python scripts\import_batch.py <hub>\Inbox --go` submits every book to the
 console's serial queue, skips what's already on the shelf, and archives
@@ -176,6 +184,7 @@ never trade one away for the other.
   skill (health-check sequence + field-verified trap table). Symptom-level fixes
   live there, not here.
 - Workflow rationale + console details: `WORKFLOWS.md` in the repo.
-- 学术精校 execution: **swarm-jury** skill.
+- 学术精校 execution: `WORKFLOWS.md` 场景二 (scripted per book; cloud-model calls
+  can go through the optional **worker** skill).
 - Reading and note-taking practice (how to read with this system, not how to run
   it): **read-book** and **note** skills.

@@ -20,7 +20,7 @@ the quality gate (import_book.py) and reflow.py count the page as verified
 with zero changes downstream.
 
 Default port: this ROOT's ragPort in ~/.reading-kit/registry.json + 100
-(complit 8866 / zhangxianyi 8867); unregistered roots fall back to 8830.
+(e.g. ragPort 8766 → console 8866); unregistered roots fall back to 8830.
 
 Usage:
   python scripts/import_server.py [--port N] [--root PATH]

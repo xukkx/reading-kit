@@ -1,6 +1,6 @@
 ---
 name: library
-description: Cross-project library manager ("书架总管") — one session manages ALL reading projects. Shows what the reader owns (books, collections, pending adjudications, running servers) as a visual dashboard or plain chat text, and routes any new book import to the right project without changing directories. Use when the user asks "我有哪些书 / 书架 / library / 书库总览", drops a PDF and says import it, or asks which project/collection something belongs to. Designed for the Reading_Hub mega-directory but works from any registered project.
+description: Cross-project library manager ("书架总管") — one session manages ALL reading projects. Shows what the reader owns (books, collections, pending adjudications, running servers) as a visual dashboard or plain chat text, and routes any new book import to the right project without changing directories. Use when the user asks "我有哪些书 / 书架 / library / 书库总览", drops a PDF and says import it, or asks which project/collection something belongs to. Designed for the hub mega-directory (created by `setup.ps1 -Hub`) but works from any registered project.
 ---
 
 # Library — the one-session manager for all reading projects
@@ -21,7 +21,7 @@ another session in another folder.
 - **Run project scripts with cwd = that project's root** (`import_book.py`,
   `rag.py`, `import_server.py` resolve `Input/`, `staging/`, `.rag/`
   relatively). The hub's junction folders make
-  `cd Reading_Hub\<slug>` equivalent to the real project root.
+  `cd <hub>\<slug>` equivalent to the real project root.
 - Ports: AI answers = `ragPort` (registry) · import console = `ragPort + 100`.
 
 ## 1. Inventory — "我有哪些书？"
@@ -129,8 +129,9 @@ drains, re-run inventory and walk the user through any gate failures.
 
 - **New project**: `pwsh -File <kit>\setup.ps1 -Target <hub>\<Name> -Slug <slug>`
   — physically inside the hub, auto-registered, no port/sync collisions.
-  Existing projects elsewhere on disk: add a junction so they appear in the hub:
-  `New-Item -ItemType Junction -Path <hub>\<slug> -Target <realpath>`.
+  Existing projects elsewhere on disk: re-run `pwsh -File <kit>\setup.ps1 -Hub <hub>`
+  — it adds junctions for every registered project idempotently (manual
+  equivalent: `New-Item -ItemType Junction -Path <hub>\<slug> -Target <realpath>`).
 - **Servers**: check with inventory's probe; start with
   `python scripts\rag.py serve` / `python scripts\import_server.py`
   (cwd = project root, detached). Port collisions across projects:
@@ -141,8 +142,8 @@ drains, re-run inventory and walk the user through any gate failures.
 ## Known shapes & gotchas (field-verified)
 
 - Two vault layouts coexist: standard `Books\<合集>\<书名>\正文.md` and legacy
-  flat `Books\<书名>\卷N.md` (zhangxianyi). `library.py` handles both; when
-  writing new content ALWAYS use the standard shape.
+  flat `Books\<书名>\卷N.md` (pre-collection projects). `library.py` handles
+  both; when writing new content ALWAYS use the standard shape.
 - Legacy projects may index everything into `.rag\default\` — chunk counts in
   the inventory are computed by file-path prefix across all indexes, so they
   stay correct either way.

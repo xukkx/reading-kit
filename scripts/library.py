@@ -18,7 +18,7 @@ Usage:
   python scripts/library.py                    # markdown to stdout (chat-friendly)
   python scripts/library.py --json             # machine-readable
   python scripts/library.py --html out.html    # self-contained dashboard page
-  python scripts/library.py --project complit  # limit to one project
+  python scripts/library.py --project <slug>   # limit to one project
   python scripts/library.py --no-probe         # skip server port probes
 """
 
